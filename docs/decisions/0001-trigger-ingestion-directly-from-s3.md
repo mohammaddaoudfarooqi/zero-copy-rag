@@ -1,11 +1,10 @@
-<!-- ABOUTME: ADR on triggering ingestion directly from S3 events instead of the
+<!-- ADR on triggering ingestion directly from S3 events instead of the
      Kafka -> Sink Connector -> sources -> Atlas Stream Processing chain. -->
 
 # 1. Trigger ingestion directly from S3 events
 
 - Status: Accepted
 - Date: 2026-07-30
-- Deciders: Cornelia Davis (Temporal)
 
 ## Context
 
@@ -38,13 +37,13 @@ For S3-sourced ingestion, prefer triggering Temporal directly from the S3 event:
 
 reusing the existing `start_ingest` seam (`pipeline/trigger.py`). Concretely:
 
-- Local (MinIO): a small consumer on the existing `s3-events` topic — or a MinIO
-  bucket webhook — that calls `start_ingest`. Drops the Sink Connector, `sources`,
+- Local (MinIO): a small consumer on the existing `s3-events` topic, or a MinIO
+  bucket webhook, that calls `start_ingest`. Drops the Sink Connector, `sources`,
   and the change-stream listener.
 - Production (AWS S3): S3 Event Notification -> Lambda/EventBridge ->
   `start_workflow("IngestWorkflow", S3Ref(bucket, key))`.
 
-The Kafka/`sources`/ASP chain is removed entirely — the webhook (local) / Lambda (prod)
+The Kafka/`sources`/ASP chain is removed entirely. The webhook (local) / Lambda (prod)
 direct trigger is the only ingestion path. (An earlier revision kept Kafka behind an opt-in
 for the MongoDB-connector showcase; that was dropped to keep the architecture minimal. A
 future multi-source fan-in could reintroduce a broker if genuinely needed.)
@@ -57,10 +56,10 @@ triggering does and does not change.
 
 Getting an S3 event to `start_workflow`:
 
-- AWS S3 has exactly four native notification destinations -- SQS, SNS, Lambda,
+- AWS S3 has exactly four native notification destinations: SQS, SNS, Lambda,
   EventBridge (one per config; all at-least-once). There is NO native S3 -> Kafka
   destination: MinIO can emit to Kafka natively, but real S3 cannot, so any Kafka-based
-  path would still need S3 -> SQS/EventBridge/Lambda -> Kafka -- i.e. Kafka would sit
+  path would still need S3 -> SQS/EventBridge/Lambda -> Kafka, i.e. Kafka would sit
   downstream of a queue that already provides at-least-once. (This is part of why the
   Kafka path was dropped.)
 - The durable at-least-once buffer is the queue in front of `start_workflow`
@@ -75,20 +74,20 @@ Failure handling:
   exhaust (Lambda async: 2 retries by default) the event is captured in the DLQ
   (durably retained, redrivable) instead of discarded. Here the consumer's only job
   is to call `start_workflow`, so the DLQ only ever holds events that cannot become a
-  workflow (malformed event, glue bug) -- genuine poison messages worth a human's
+  workflow (malformed event, glue bug): genuine poison messages worth a human's
   attention. Once the workflow starts, Temporal owns retries and durability.
 - The real weak point is the S3 -> destination notification hop itself, and it is the
   same for all four destinations. S3 notifications are "designed to be delivered at
   least once" but AWS does NOT guarantee delivery, and this hop has no DLQ for any
   destination: if the destination is unavailable beyond S3's short internal retry, the
-  notification is lost. (Lambda is partly cushioned -- throttles and concurrency
+  notification is lost. (Lambda is partly cushioned: throttles and concurrency
   limits are retried by Lambda's async queue for up to 6h once the event is accepted,
   so only a true Lambda service outage reduces to short-retry-then-drop.) A Kafka-based
-  path would not fix this — the weakness is upstream of Kafka. Locally, MinIO's `queue_dir`
+  path would not fix this; the weakness is upstream of Kafka. Locally, MinIO's `queue_dir`
   buffers undelivered webhook events (a source-side mitigation real S3 lacks); the
   reconciliation sweep is the general fix.
 
-Mitigations (architecture-independent -- both designs need them):
+Mitigations (architecture-independent; both designs need them):
 
 - Destination choice only tunes the POST-acceptance window; none of the four protect
   the S3 -> destination handoff:
@@ -98,10 +97,10 @@ Mitigations (architecture-independent -- both designs need them):
     - SNS         immediate fan-out; per-subscriber retry
   Pick per the consumer's needs (EventBridge is a reasonable default once events are
   on the bus), but this choice does NOT close the lost-notification risk.
-- Reconcile against S3 as source of truth -- the load-bearing mitigation. The object
+- Reconcile against S3 as source of truth. This is the load-bearing mitigation. The object
   is durably in S3 regardless of notification fate, and a scheduled sweep (S3 Inventory
   or ListObjects) diffed against processed keys in `knowledge`, starting ingest for the
-  gaps, catches anything the notification missed -- independent of which destination
+  gaps, catches anything the notification missed, independent of which destination
   was chosen. This is naturally a Temporal Scheduled Workflow, made safe by the
   idempotent workflow id (re-driving a processed object is a no-op).
 
@@ -115,7 +114,7 @@ Positive:
 - Removes four moving parts (Kafka, Sink Connector, `sources` collection, ASP) from
   the S3 path; fewer failure modes and less local infra.
 - No loss of at-least-once delivery (provided by the queue) or dedup (Temporal's
-  deterministic workflow id) — see Delivery semantics.
+  deterministic workflow id); see Delivery semantics.
 - No loss of the Atlas retrieval showcase: Voyage embeddings, the `knowledge`
   vector store, Atlas Vector Search, and agent memory are downstream of the trigger
   and unchanged.
@@ -129,12 +128,12 @@ Negative / trade-offs:
 
 ## Alternatives considered
 
-1. Keep the chain as-is — justified only by multi-source fan-in (premature for one
+1. Keep the chain as-is. Justified only by multi-source fan-in (premature for one
    source) or the partner-demo goal.
-2. Direct trigger, drop Atlas from the trigger path (this ADR) — Atlas remains the
+2. Direct trigger, drop Atlas from the trigger path (this ADR). Atlas remains the
    vector store + embeddings provider on the retrieval side.
-3. Direct trigger but still record a source doc in Atlas from inside the workflow —
-   keeps an Atlas "landing record" without Kafka/Sink/ASP, if that record is wanted.
+3. Direct trigger but still record a source doc in Atlas from inside the workflow.
+   Keeps an Atlas "landing record" without Kafka/Sink/ASP, if that record is wanted.
 
 ## Implementation
 
@@ -144,7 +143,7 @@ Sink Connector / `sources` / ASP chain has been **removed entirely**:
 - Shared core `handle_s3_event(client, event)` in `pipeline/trigger.py` wraps the existing
   `refs_from_s3_event` + `start_ingest`. Two thin adapters call it: `POST /ingest-event`
   (`pipeline/trigger_api.py`) for the MinIO webhook, and `pipeline/lambda_handler.py` for
-  real S3 via AWS Lambda — the same handler in both.
+  real S3 via AWS Lambda: the same handler in both.
 - Local default: MinIO's `webhook` notify target (with `queue_dir` for at-least-once) POSTs
   each ObjectCreated event to `trigger_api` at `host.docker.internal:8088/ingest-event`.
   `make start` runs `trigger_api`; `make infra-up` starts only MinIO.
@@ -155,6 +154,20 @@ Sink Connector / `sources` / ASP chain has been **removed entirely**:
   identical `start_workflow` call (the "same code both places" guarantee).
 - Follow-ups: deploying the Lambda (packaging, Temporal Cloud mTLS, VPC egress) and a
   reconciliation sweep (S3 Inventory / ListObjects diffed against `knowledge`). Note the
-  reconciliation gap lives in the S3 eventing layer, not in this design — it is on par with a
+  reconciliation gap lives in the S3 eventing layer, not in this design. It is on par with a
   Kafka-based approach, which ingests S3 events through the same best-effort S3-notification
   hop, so removing Kafka neither introduces nor worsens it.
+
+## Amendment (2026-09-24): local MinIO path removed
+
+The MinIO webhook described above was the local stand-in for the Lambda. It has been removed,
+along with `infra/docker-compose.yml` and the `make infra-*` targets. The query-side agent reads
+source spans from behind an egress proxy that admits only the S3 hosts in `agent.yaml`, so a
+local object store cannot serve it, and the local stack now uses the same real S3 bucket as the
+hosted deployment.
+
+With no event source locally, `make seed` uploads the object and then calls `start_ingest`
+itself (through `start_ingests` in `pipeline/trigger.py`). The decision is unchanged: the trigger
+still goes straight to Temporal, the Lambda and `POST /ingest-event` still share
+`handle_s3_event`, and `tests/test_handle_s3_event.py` now asserts that the prefixed
+(`s3:ObjectCreated:Put`) and unprefixed event names are handled identically.

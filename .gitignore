@@ -15,9 +15,17 @@ uv.lock
 # Local run state (pidfiles + background logs from `make start`)
 .local/
 
-# React UI build artifacts
-agent/ui/node_modules/
-agent/ui/dist/
-
 # OS
 .DS_Store
+.agentic/
+.agentengine/
+.env.*
+# ...but .env.example is the documented template and is tracked.
+!.env.example
+.devcontainer/
+
+# Agent tooling that lives in the working tree but is not part of this project.
+# Untracked and unignored, both of these would be swept in by `git add -A`.
+.agents/
+.claude/skills/
+nohup.out

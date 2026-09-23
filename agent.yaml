@@ -1,0 +1,73 @@
+# Atlas Agent Engine contract for the zero-copy RAG agent.
+#
+# The repository root is the agent workspace, because the two tools import
+# pipeline.retrieval and pipeline.spanio directly and pipeline/ has to be inside
+# the built image. `agentengine build` uploads a source archive of the whole
+# workspace, so .agentengineignore at the root narrows that archive to the agent's
+# own files. Run agentengine init / build / deploy from here.
+name: zero-copy-rag
+# <module path>:<variable name>. mongodb_agent_engine is a top-level package in this
+# repo (see [tool.hatch.build.targets.wheel] in pyproject.toml), so there is no
+# src. prefix.
+entrypoint: mongodb_agent_engine.app:app
+framework: langgraph
+version: 0.1.0
+
+features:
+  # Preserve and resume workflow state across runtime restarts.
+  durable_workflow: true
+  # Long-term profile memory is a separate feature from this agent's corpus
+  # retrieval and would pull in its own Voyage-backed memory server. Off.
+  memory: false
+  # Required by App.deep_agent(); the SDK raises without it.
+  deep_agent: true
+
+# Tool placement and per-sandbox secret grants.
+#
+# Both tools do network and database I/O, so both run in the Tool Pod rather
+# than in the agent runtime. The agent block grants nothing and is required to
+# be present even when empty.
+#
+# This is where the design's capability claim is actually enforced. Secrets are
+# deny-by-default and scoped per sandbox, so the credentials below exist only in
+# the tool sandbox. Note what that does and does not buy: it separates the
+# reasoning process from the credentials, but it does not separate the two tools
+# from each other, because they share one Tool Pod. See mongodb_agent_engine/README.md.
+sandboxes:
+  agent:
+    secrets: []
+    tools: []
+  tool:
+    secrets:
+      - MONGODB_URI
+      # Not a credential, but it differs from the code default and .env never
+      # ships, so the Tool Pod only sees it if it is granted here.
+      - MONGODB_DB
+      - VOYAGE_API_KEY
+      - LLM_API_KEY
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+    tools:
+      - search_knowledge
+      - read_span
+
+# Egress is deny-all by default; every destination has to be named.
+network:
+  egress:
+    # Query embedding for $vectorSearch, through MongoDB's hosted Voyage
+    # endpoint rather than api.voyageai.com. See VOYAGE_BASE_URL.
+    - fqdn: ai.mongodb.com
+      ports: [443]
+    # Regional S3 endpoint, plus the virtual-hosted-style host boto3 builds from
+    # the bucket name. s3://temporal-agentic lives in us-east-1; a bucket in
+    # another region needs both lines changed, not just the first.
+    - fqdn: s3.us-east-1.amazonaws.com
+      ports: [443]
+    - fqdn: temporal-agentic.s3.us-east-1.amazonaws.com
+      ports: [443]
+    # Model calls. Every provider goes through the Grove gateway, so the direct
+    # provider hosts (api.anthropic.com, api.openai.com,
+    # generativelanguage.googleapis.com) are deliberately absent. Setting
+    # LLM_PROVIDER to a direct provider therefore also needs an egress entry.
+    - fqdn: grove-gateway-prod.azure-api.net
+      ports: [443]

@@ -1,0 +1,9 @@
+# Local-only settings for `agentengine dev up`. Never read by build or deploy.
+services:
+  playground:
+    port: 3000
+  # The pipeline's own Atlas cluster holds the knowledge collection, so local
+  # dev points at it rather than at a throwaway container. MONGODB_URI in .env
+  # selects which cluster.
+  mongodb:
+    local: false

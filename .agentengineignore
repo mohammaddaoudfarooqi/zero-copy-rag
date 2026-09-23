@@ -1,0 +1,57 @@
+# What `agentengine build` uploads to the platform.
+#
+# The repository root is the agent workspace, so without this file the source
+# archive would carry the whole repo: the docs, the test suite and the seed
+# data, none of which the agent runs on.
+# The rule here is deny-everything-at-the-top-level, then name what ships.
+#
+# gitignore syntax. A negation cannot resurrect a file whose parent directory is
+# excluded, which is why the first line is `/*` (top-level entries only) rather
+# than `*`: each directory below is re-included whole.
+#
+# .env, .env.*, *.pem, *.key, .git and the credential stores are excluded by the
+# CLI unconditionally and cannot be negated back in.
+
+/*
+
+# The agent contract and the local-dev overrides.
+!/agent.yaml
+!/dev.yaml
+!/.agentengineignore
+
+# Build inputs. pyproject.toml declares readme = "README.md", so the README has
+# to ship or the wheel build fails.
+#
+# No uv.lock ships. One does exist locally, written in-container by `uv sync`,
+# but it is gitignored and the `/*` rule above already excludes it: nothing
+# below negates it back in, so leaving it out takes no extra rule.
+#
+# Keeping it out is deliberate, not incidental. Both the hosted builder and the
+# dev runner install the SDK from wheels baked into their base images rather
+# than from an index, so a lock resolved anywhere else describes a different
+# set of packages. The runner runs `uv sync --frozen` whenever a lock is
+# present, which would install that set and nothing else. The scaffold ships no
+# lock either; without one the builder resolves from pyproject.toml.
+!/pyproject.toml
+!/uv.toml
+!/.python-version
+!/README.md
+
+# The agent itself.
+!/mongodb_agent_engine/
+
+# Imported by the two tools: retrieval, spanio, and their closure of clients,
+# config, config_store and models. The rest of the package is Temporal ingest
+# machinery the agent never imports, but it ships anyway because
+# [tool.hatch.build.targets.wheel] lists the package as a whole.
+!/pipeline/
+
+# Listed in [tool.hatch.build.targets.wheel]. Nothing at runtime imports it, but
+# the wheel build fails if a listed package is missing from the archive.
+!/infra/
+
+# Caches that would otherwise ride along inside the directories above.
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

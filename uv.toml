@@ -1,0 +1,9 @@
+# Keep resolution off very recently published packages so a same-day upstream
+# release cannot change a build. The Agent Engine scaffold writes this as the
+# relative string "7 days", which only newer uv releases parse; uv 0.8.x needs an
+# RFC 3339 date and fails to parse the file at all. A fixed date works on both.
+#
+# The date has to be later than 2026-09-22, when the agent SDK names were
+# registered on PyPI. Before that date they have no versions at all, and
+# resolution fails even though `make install` never installs them.
+exclude-newer = "2026-09-23T00:00:00Z"

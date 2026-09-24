@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING
 from .config import settings
 
 if TYPE_CHECKING:  # avoid importing heavy deps at module load
-    import boto3
     import voyageai
     from pymongo import MongoClient
 

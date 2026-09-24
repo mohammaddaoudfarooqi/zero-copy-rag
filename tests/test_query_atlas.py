@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from infra.query_atlas import format_hit
 
 HIT = {
@@ -23,8 +25,6 @@ def test_format_hit_ok_collapses_newlines_and_truncates():
     assert snippet in line
     assert text[161:] not in line
 
-
-import pytest
 
 UNVERIFIED = "SECRET-PAYLOAD-THAT-FAILED-VERIFICATION"
 

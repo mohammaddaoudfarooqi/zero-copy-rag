@@ -12,12 +12,12 @@ LOGDIR := .local
 
 # Optional args:
 #   make seed FILE=./doc.md KEY=docs/doc.md
-#   make query Q="what does the cookbook say?"
+#   make query Q="what does queryable encryption protect?"
 #   make backfill MODEL=voyage-3-large
 #   make seed-docs
 FILE ?= seed/ethical_governance.md
 KEY ?=
-Q ?= what does Temporal own in this architecture?
+Q ?= how does role-based access control protect constitutional principles?
 MODEL ?= voyage-3-large
 REPO_DIR ?=
 PREFIX ?= temporalio-documentation-md-only

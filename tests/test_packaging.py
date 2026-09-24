@@ -11,8 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 IGNORE_FILE = REPO_ROOT / ".agentengineignore"
 
 # Paths the archive must never carry. The docs are not the agent's to ship, and
-# the seed corpus is just weight.
-WITHHELD = ["docs", "PR_DESCRIPTION.md", "seed"]
+# the tests and the seed corpus are just weight.
+WITHHELD = ["docs", "tests", "seed"]
 
 
 def _rules() -> list[str]:

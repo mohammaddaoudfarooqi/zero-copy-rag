@@ -3,6 +3,8 @@ name = "temporal-app"
 version = "0.1.0"
 description = "MongoDB x Temporal Partner Reference Architecture, Part 1: fresh vector store (S3 -> Temporal -> Voyage -> Atlas)"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "temporalio[opentelemetry]>=1.9,<2",

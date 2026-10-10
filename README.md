@@ -296,3 +296,10 @@ mdb-temporal-pra/
 | **[docs/LLD.md](docs/LLD.md)**                         | Low-level design: data contracts, workflow internals, scaling to multiple sources and data types  |
 | **[mongodb_agent_engine/README.md](mongodb_agent_engine/README.md)** | The hosted deep agent: SDK surface, what the capability split enforces, deployment on Atlas Agent Engine |
 | **[docs/decisions/](docs/decisions/)**                 | Architecture Decision Records, e.g. ADR 0001 (direct-from-S3 triggering)                          |
+
+---
+
+## License
+
+The code is licensed under the [Apache License 2.0](LICENSE). The sample document in `seed/`
+is not covered by that license and keeps its own copyright notice.

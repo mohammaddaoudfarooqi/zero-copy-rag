@@ -112,8 +112,7 @@ directly: an AWS Lambda in production, through the shared `handle_s3_event`. Loc
 workflow to completion across retries, worker restarts, and infra maintenance.
 
 - **Trigger goes directly to Temporal.** Temporal's durable execution provides the "don't lose the
-  event" guarantee; the trigger is a thin adapter (`pipeline/lambda_handler.py`, or
-  `POST /ingest-event` for anything that can POST the S3 event envelope).
+  event" guarantee; the trigger is a thin adapter (`pipeline/lambda_handler.py`).
 - **Idempotent, update-in-place.** A content-hash check skips re-embedding unchanged objects; an
   edited object re-embeds and upserts in place (see the two-hashes note below).
 - **Batched & scale-out.** Chunks embed in batches of 32, one ranged read and one Voyage call per
@@ -239,7 +238,6 @@ targets.
 | Service         | URL                   | Notes                                              |
 | --------------- | --------------------- | -------------------------------------------------- |
 | Temporal Web UI | http://localhost:8233 | watch `IngestWorkflow` runs                        |
-| Trigger API     | http://localhost:8088 | `/ingest-trigger` `{bucket, key}`, `/ingest-event` |
 | Playground      | http://localhost:3000 | local Agent Engine stack (`make playground`)       |
 
 ---
@@ -265,7 +263,6 @@ mdb-temporal-pra/
 ├── pipeline/
 │   ├── worker.py                   ← Temporal worker process (ingestion only)
 │   ├── trigger.py                  ← shared handle_s3_event → start IngestWorkflow
-│   ├── trigger_api.py              ← HTTP /ingest-trigger + S3 envelope /ingest-event
 │   ├── lambda_handler.py           ← AWS Lambda entrypoint for real S3 (same handler)
 │   ├── retrieval.py                ← vector search, returns pointers, never text
 │   ├── spanio.py                   ← resolves a pointer against the source object, hash-verified

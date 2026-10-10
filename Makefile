@@ -37,7 +37,7 @@ help: ## Show this help
 		| sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo
 	@echo "Demo:       make demo    (start + index + seed + local Playground)"
-	@echo "One-shot:   make start   (temporal + worker + trigger-api)"
+	@echo "One-shot:   make start   (temporal + worker)"
 	@echo "Then:       make index (once) ; make seed ; make playground"
 	@echo "Teardown:   make stop"
 
@@ -82,10 +82,6 @@ temporal: ## Run the Temporal dev server (foreground; Web UI :8233)
 worker: check-env ## Run the Temporal worker (foreground)
 	$(PY) -m pipeline.worker
 
-.PHONY: trigger-api
-trigger-api: check-env ## Run the trigger HTTP endpoint (/ingest-trigger {bucket,key}; /ingest-event S3 envelope)
-	$(PY) -m pipeline.trigger_api
-
 # ---------------------------------------------------------------------------
 # One-command start / stop
 # ---------------------------------------------------------------------------
@@ -105,10 +101,9 @@ start: install .env ## Start everything in the background (NO_WORKER=1 skips the
 	else \
 		$(MAKE) -s _bg NAME=worker CMD="$(PY) -u -m pipeline.worker"; \
 	fi
-	@$(MAKE) -s _bg NAME=trigger-api CMD="$(PY) -u -m pipeline.trigger_api"
 	@sleep 2
 	@echo
-	@echo "started. Temporal UI: http://localhost:8233 | Trigger API: http://localhost:8088"
+	@echo "started. Temporal UI: http://localhost:8233"
 	@if [ -n "$(NO_WORKER)" ]; then echo "NOTE: worker NOT started. Run 'make worker' in a separate foreground terminal (kill it mid-ingest to demo durability)"; fi
 	@echo "next: 'make index' (once) ; 'make seed' ; 'make playground'"
 	@echo "logs: 'make app-logs'   stop: 'make stop'"
@@ -127,11 +122,9 @@ stop: stop-app ## Stop background app processes and Temporal
 	fi
 
 .PHONY: stop-app
-stop-app: ## Stop worker + trigger-api (leaves Temporal up)
-	@-for pat in pipeline.worker pipeline.trigger_api; do \
-		pkill -f "$$pat" 2>/dev/null && echo "stopped $$pat" || true; \
-	done
-	@-for p in worker trigger-api; do \
+stop-app: ## Stop the worker (leaves Temporal up)
+	@-pkill -f pipeline.worker 2>/dev/null && echo "stopped pipeline.worker" || true
+	@-for p in worker; do \
 		if [ -f $(LOGDIR)/$$p.pid ]; then kill $$(cat $(LOGDIR)/$$p.pid) 2>/dev/null || true; rm -f $(LOGDIR)/$$p.pid; fi; \
 	done
 
@@ -140,13 +133,12 @@ restart-app: stop-app ## Restart app processes (e.g. after editing .env). Leaves
 	@mkdir -p $(LOGDIR)
 	@sleep 1
 	@$(MAKE) -s _bg NAME=worker CMD="$(PY) -u -m pipeline.worker"
-	@$(MAKE) -s _bg NAME=trigger-api CMD="$(PY) -u -m pipeline.trigger_api"
 	@sleep 2
 	@echo "restarted app processes with current .env"
 
 .PHONY: app-logs
-app-logs: ## Tail worker + trigger-api + temporal logs
-	@tail -n +1 -f $(LOGDIR)/worker.log $(LOGDIR)/trigger-api.log $(LOGDIR)/temporal.log 2>/dev/null
+app-logs: ## Tail worker + temporal logs
+	@tail -n +1 -f $(LOGDIR)/worker.log $(LOGDIR)/temporal.log 2>/dev/null
 
 # ---------------------------------------------------------------------------
 # Drive the pipeline

@@ -68,9 +68,6 @@ class Settings(BaseSettings):
     voyage_base_url: str = "https://ai.mongodb.com/v1"
     embed_dim: int = 1024
 
-    # ---- Service ports ----
-    trigger_api_port: int = 8088
-
     # ---- AWS / S3 ----
     aws_region: str = "us-east-1"
     # Explicit creds. Leave blank to fall back to boto3's standard credential chain

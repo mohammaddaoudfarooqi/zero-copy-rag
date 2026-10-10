@@ -152,8 +152,7 @@ and `tests/test_egress.py` asserts on the host boto3 actually builds. Nothing to
 it explains why the allow-list in `agent.yaml` names `s3.us-east-1.amazonaws.com` and not the
 global host.
 
-The remaining defaults work as-is (Temporal on `localhost:7233`, trigger API on
-`localhost:8088`).
+The remaining defaults work as-is (Temporal on `localhost:7233`).
 
 ---
 
@@ -221,11 +220,8 @@ Starts (in order):
 
 1. Temporal dev server (`:7233`, Web UI `:8233`), or an already-running one on `:7233`
 2. Temporal worker (`pipeline/worker.py`)
-3. Trigger API (`pipeline/trigger_api.py`, `:8088`): `POST /ingest-trigger` with a flat
-   `{bucket, key}` body, and `POST /ingest-event` for a raw S3 event envelope
 
-The worker is what runs ingestion. `make seed` talks to Temporal directly, so the trigger API is
-only needed when something else starts ingests over HTTP.
+The worker is what runs ingestion. `make seed` talks to Temporal directly.
 
 `NO_WORKER=1 make start` leaves the worker out so you can run `make worker` in a foreground
 terminal. Killing it mid-ingest and starting it again is the quickest way to watch Temporal
@@ -263,14 +259,6 @@ make seed FILE=./my-doc.md KEY=docs/my-doc.md      # choose the S3 key
 workflow id. `make seed-docs` does the same for every `.md` and `.mdx` file in the Temporal docs
 repository. With `NO_TRIGGER=1` either one only uploads, which is what you want when an S3 event
 notification is wired to the bucket and will start the workflow itself.
-
-To re-ingest an object that is already in the bucket without uploading it again:
-
-```bash
-curl -X POST http://localhost:8088/ingest-trigger \
-  -H 'Content-Type: application/json' \
-  -d '{"bucket": "temporal-agentic", "key": "ethical_governance.md"}'
-```
 
 Every path starts the same workflow, whose id is derived from the S3 URI. Starting the same key
 twice replaces any in-flight ingest rather than duplicating it, and an unchanged document
@@ -367,7 +355,7 @@ succeed and point every query at a collection with nothing in it.
 
 In production the trigger is an **AWS Lambda** subscribed to the S3 bucket's **ObjectCreated**
 event notifications. The Lambda calls `pipeline.lambda_handler`, which runs the **same**
-`handle_s3_event` code the trigger API's `/ingest-event` runs: parse the event, start one
+`handle_s3_event` code in `pipeline/trigger.py`: parse the event, start one
 `IngestWorkflow` per object. No Kafka, `sources` collection, or Stream Processing is involved.
 With the notification in place, seed with `NO_TRIGGER=1` so the upload is the only trigger.
 

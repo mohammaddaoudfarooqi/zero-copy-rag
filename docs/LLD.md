@@ -70,7 +70,6 @@ pipeline/
 ├── models.py               <- S3Ref, Span, doc_id_for_uri, sha256_hex
 ├── clients.py               <- lazy clients: Mongo, Voyage, S3, SQS, cached per credential
 ├── trigger.py                <- shared trigger core: handle_s3_event + start_ingest
-├── trigger_api.py             <- HTTP trigger: POST /ingest-event (S3 envelope) + /ingest-trigger {bucket, key}
 ├── lambda_handler.py           <- AWS Lambda entrypoint for real S3 (same handle_s3_event core)
 ├── s3util.py                    <- parse an S3 ObjectCreated event (direct, SQS or SNS) into list[S3Ref]
 ├── search_index.py                <- idempotent Atlas Vector Search index management
@@ -184,7 +183,6 @@ flowchart TD
 
     subgraph TRG[Trigger adapter]
         LAMBDA[AWS Lambda<br/>lambda_handler.py]
-        HOOK[trigger_api.py<br/>POST /ingest-event]
     end
 
     TRG -->|handle_s3_event: refs_from_s3_event, start_ingest per object| START
@@ -557,22 +555,6 @@ async def start_ingest(client, ref: S3Ref) -> str:
 `refs_from_s3_event` (`s3util.py`) parses the standard `Records[*].s3` envelope (SQS- and SNS-wrapped
 bodies are unwrapped, and `s3:TestEvent` yields no refs), URL-decoding the key.
 
-### HTTP: `trigger_api.py`
-
-For any event source that can POST the S3 envelope, `POST /ingest-event` calls the same core. The
-endpoint reuses one cached Temporal client (FastAPI lifespan):
-
-```python
-@app.post("/ingest-event")
-async def ingest_event(request: Request) -> dict:
-    event = await request.json()
-    started = await handle_s3_event(request.app.state.temporal, event)
-    return {"started": started}
-```
-
-`POST /ingest-trigger {bucket, key}` starts one ingest for an object already in the bucket, for
-scripted or manual re-ingests.
-
 ### Local dev: `seed.py` and `seed_repo.py`
 
 Nothing emits object-created events locally, so the seed scripts start the workflow themselves:
@@ -731,7 +713,6 @@ All settings live in `.env` (loaded by `pipeline/config.py` via Pydantic Setting
 | `TEMPORAL_ADDRESS`        | `localhost:7233`          | Temporal server address                           |
 | `TEMPORAL_NAMESPACE`      | `default`                 | Temporal namespace                                |
 | `TEMPORAL_TASK_QUEUE`     | `temporal-pipeline`        | Worker task queue                                 |
-| `TRIGGER_API_PORT`        | `8088`                    | Trigger API port                                  |
 | `AWS_REGION`              | `us-east-1`               | AWS region for the S3 client                      |
 | `AWS_ACCESS_KEY_ID`       | (none)                    | Explicit creds (blank falls back to boto3's chain) |
 | `AWS_SECRET_ACCESS_KEY`   | (none)                    | Explicit creds (blank falls back to boto3's chain) |
@@ -747,8 +728,8 @@ The hosted agent reads three more variables from its environment, not from `pipe
 | `LLM_API_KEY`  | (none)             | Key for the selected provider; the Grove key under a `grove-*` provider     |
 
 Settings removed with the old agent: `openai_api_key`, `agent_model`, `agent_max_turns`,
-`agent_api_port`, `voyage_rerank_model`. `trigger_api_port` is unrelated to the agent removal and
-remains.
+`agent_api_port`, `voyage_rerank_model`. `trigger_api_port` went with the HTTP trigger, which had no
+remaining caller.
 
 ---
 
@@ -783,10 +764,10 @@ There is no `sources` collection, no sink connector, and no change-stream watche
 - **RDBMS / CDC (Debezium, etc.):** a small consumer receives change events and calls
   `start_ingest`. For inline row content, extend the contract with a payload and branch in
   `fetch_and_stage_chunks`, keeping in mind the byte-reproducibility constraint from section 7.
-- **Existing Atlas data (change stream):** an Atlas trigger or a watcher process calls the
-  `/ingest-event` endpoint (or `start_ingest`) per change.
-- **Webhook / HTTP (Notion, GitHub, etc.):** POST to `trigger_api`; large payloads upload to S3
-  first and construct an `S3Ref`, small ones inline.
+- **Existing Atlas data (change stream):** an Atlas trigger or a watcher process calls
+  `start_ingest` per change.
+- **Webhook / HTTP (Notion, GitHub, etc.):** a small authenticated HTTP handler (none ships here)
+  uploads the payload to S3, constructs an `S3Ref` and calls `start_ingest`.
 
 ### Multi-source worker scaling
 

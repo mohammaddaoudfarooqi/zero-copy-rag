@@ -1,5 +1,5 @@
 # AWS Lambda entrypoint: S3 ObjectCreated event -> Temporal IngestWorkflow.
-# Thin adapter over the shared handle_s3_event core; the same logic trigger_api's /ingest-event runs.
+# Thin adapter over the shared handle_s3_event core in pipeline/trigger.py.
 
 from __future__ import annotations
 

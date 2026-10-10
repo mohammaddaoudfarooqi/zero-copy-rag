@@ -78,7 +78,7 @@ pipeline/
 ├── retrieval.py                     <- $vectorSearch over the active collection; returns pointers, never text
 ├── spanio.py                         <- the only module that resolves a pointer back into text
 ├── cutover.py                         <- flip the active collection/index/model pointer
-├── seed.py / seed_repo.py               <- dev utilities: upload a file / a markdown docs repo
+├── seed.py                              <- dev utility: upload a file and start its ingest
 ├── workflows/
 │   └── ingest_workflow.py                <- IngestWorkflow: stage -> embed in batches -> index
 ├── activities/
@@ -521,10 +521,10 @@ async def start_ingest(client, ref: S3Ref) -> str:
 `refs_from_s3_event` (`s3util.py`) parses the standard `Records[*].s3` envelope (SQS- and SNS-wrapped
 bodies are unwrapped, and `s3:TestEvent` yields no refs), URL-decoding the key.
 
-### Local dev: `seed.py` and `seed_repo.py`
+### Local dev: `seed.py`
 
-Nothing emits object-created events locally, so the seed scripts start the workflow themselves:
-each uploads its file or files, then calls `start_ingests(refs)` (`trigger.py`), a synchronous
+Nothing emits object-created events locally, so `seed.py` starts the workflow itself: it uploads
+the file, then calls `start_ingests(refs)` (`trigger.py`), a synchronous
 wrapper over `start_ingest`. The ref carries the ETag and size from the upload. `--no-trigger`
 (`NO_TRIGGER=1` through `make`) skips the start, for a bucket whose event notification will start
 it instead; if both fire, the two starts share one workflow id and the later replaces the earlier.

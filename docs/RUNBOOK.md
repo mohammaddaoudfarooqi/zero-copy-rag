@@ -260,8 +260,7 @@ make seed FILE=./my-doc.md KEY=docs/my-doc.md      # choose the S3 key
 ```
 
 `make seed` uploads the file to `S3_BUCKET` and then starts its `IngestWorkflow`, printing the
-workflow id. `make seed-docs` does the same for every `.md` and `.mdx` file in the Temporal docs
-repository. With `NO_TRIGGER=1` either one only uploads, which is what you want when an S3 event
+workflow id. With `NO_TRIGGER=1` it only uploads, which is what you want when an S3 event
 notification is wired to the bucket and will start the workflow itself.
 
 Every path starts the same workflow, whose id is derived from the S3 URI. Starting the same key

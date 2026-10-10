@@ -13,18 +13,9 @@ LOGDIR := .local
 # Optional args:
 #   make seed FILE=./doc.md KEY=docs/doc.md
 #   make query Q="what does queryable encryption protect?"
-#   make seed-docs
 FILE ?= seed/ethical_governance.md
 KEY ?=
 Q ?= how does role-based access control protect constitutional principles?
-MODEL ?= voyage-3-large
-REPO_DIR ?=
-PREFIX ?= temporalio-documentation-md-only
-DRY_RUN ?=
-REPO_URL ?= https://github.com/temporalio/documentation.git
-REPO_REF ?= main
-CHECKOUT_DIR ?= .local/imports/temporal-documentation
-DELAY_MS ?= 250
 
 .DEFAULT_GOAL := help
 
@@ -146,10 +137,6 @@ app-logs: ## Tail worker + temporal logs
 .PHONY: seed
 seed: check-env ## Upload a file to S3_BUCKET and start its IngestWorkflow (FILE=...; NO_TRIGGER=1 uploads only)
 	$(PY) -m pipeline.seed $(if $(FILE),--file $(FILE)) $(if $(KEY),--key $(KEY)) $(if $(NO_TRIGGER),--no-trigger)
-
-.PHONY: seed-docs
-seed-docs: check-env ## Clone/update Temporal docs repo, upload only .md/.mdx files and start their ingests
-	$(PY) -m pipeline.seed_repo $(if $(REPO_DIR),$(REPO_DIR),) $(if $(REPO_URL),--repo-url $(REPO_URL)) $(if $(CHECKOUT_DIR),--checkout-dir $(CHECKOUT_DIR)) --ref $(REPO_REF) --prefix $(PREFIX) --delay-ms $(DELAY_MS) $(if $(DRY_RUN),--dry-run) $(if $(NO_TRIGGER),--no-trigger)
 
 # The query agent runs in the Atlas Agent Engine local stack, not as a host process.
 # Its tools read the same S3_BUCKET and Atlas collection the worker writes.

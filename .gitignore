@@ -27,5 +27,6 @@ uv.lock
 # Agent tooling that lives in the working tree but is not part of this project.
 # Untracked and unignored, both of these would be swept in by `git add -A`.
 .agents/
-.claude/skills/
+.claude/
+.vscode/
 nohup.out

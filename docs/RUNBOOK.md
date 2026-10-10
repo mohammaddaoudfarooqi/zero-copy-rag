@@ -31,7 +31,7 @@ the same steps one at a time.
 - [5. S3 bucket](#5-s3-bucket)
 - [6. Run the full stack](#6-run-the-full-stack)
 - [7. Verify ingestion](#7-verify-ingestion)
-- [8. Backfill + model cutover](#8-backfill--model-cutover)
+- [8. Model change: re-ingest + cutover](#8-model-change-re-ingest--cutover)
 - [9. Production trigger (AWS Lambda)](#9-production-trigger-aws-lambda)
 - [10. Query plane (hosted deep agent)](#10-query-plane-hosted-deep-agent)
 - [Cloud infra references](#cloud-infra-references)
@@ -140,8 +140,12 @@ AWS_SECRET_ACCESS_KEY=<your-aws-secret-access-key>
 
 Leave both keys blank to fall back to boto3's standard credential chain (a profile or a role).
 
-For the Playground, also set `LLM_API_KEY`. With the default `LLM_PROVIDER=grove-anthropic`
-it holds the Grove gateway key. The pipeline does not read it; only the agent does. The
+For the Playground, also set `LLM_API_KEY`. With the default `LLM_PROVIDER=anthropic` it holds
+an Anthropic API key. The pipeline does not read it; only the agent does. To route model calls
+through an Anthropic- or OpenAI-compatible gateway instead, set `LLM_BASE_URL`, and
+`LLM_API_KEY_HEADER` if the gateway reads the key from its own header. A hosted deploy through
+a gateway also needs its host added to `network.egress` in `agent.yaml`, and both settings
+listed under `sandboxes.tool.secrets`; keep those edits out of commits if the gateway is private. The
 searchable collection defaults to `knowledge_zc` (`pipeline/config.py`,
 `knowledge_collection`).
 
@@ -152,8 +156,7 @@ and `tests/test_egress.py` asserts on the host boto3 actually builds. Nothing to
 it explains why the allow-list in `agent.yaml` names `s3.us-east-1.amazonaws.com` and not the
 global host.
 
-The remaining defaults work as-is (Temporal on `localhost:7233`, trigger API on
-`localhost:8088`).
+The remaining defaults work as-is (Temporal on `localhost:7233`).
 
 ---
 
@@ -221,11 +224,8 @@ Starts (in order):
 
 1. Temporal dev server (`:7233`, Web UI `:8233`), or an already-running one on `:7233`
 2. Temporal worker (`pipeline/worker.py`)
-3. Trigger API (`pipeline/trigger_api.py`, `:8088`): `POST /ingest-trigger` with a flat
-   `{bucket, key}` body, and `POST /ingest-event` for a raw S3 event envelope
 
-The worker is what runs ingestion. `make seed` talks to Temporal directly, so the trigger API is
-only needed when something else starts ingests over HTTP.
+The worker is what runs ingestion. `make seed` talks to Temporal directly.
 
 `NO_WORKER=1 make start` leaves the worker out so you can run `make worker` in a foreground
 terminal. Killing it mid-ingest and starting it again is the quickest way to watch Temporal
@@ -260,17 +260,8 @@ make seed FILE=./my-doc.md KEY=docs/my-doc.md      # choose the S3 key
 ```
 
 `make seed` uploads the file to `S3_BUCKET` and then starts its `IngestWorkflow`, printing the
-workflow id. `make seed-docs` does the same for every `.md` and `.mdx` file in the Temporal docs
-repository. With `NO_TRIGGER=1` either one only uploads, which is what you want when an S3 event
+workflow id. With `NO_TRIGGER=1` it only uploads, which is what you want when an S3 event
 notification is wired to the bucket and will start the workflow itself.
-
-To re-ingest an object that is already in the bucket without uploading it again:
-
-```bash
-curl -X POST http://localhost:8088/ingest-trigger \
-  -H 'Content-Type: application/json' \
-  -d '{"bucket": "temporal-agentic", "key": "ethical_governance.md"}'
-```
 
 Every path starts the same workflow, whose id is derived from the S3 URI. Starting the same key
 twice replaces any in-flight ingest rather than duplicating it, and an unchanged document
@@ -331,35 +322,32 @@ In Atlas, confirm:
 
 ---
 
-## 8. Backfill + model cutover
+## 8. Model change: re-ingest + cutover
 
-Use this when upgrading the embedding model (e.g. `voyage-3.5` to a newer model with different
-dimensions).
-
-**Current status: the re-embed step is deferred and does not run end to end.** This is a
-design decision, not an unfinished edge: zero-copy means `knowledge_zc` holds pointers and
-embeddings but no text, so there is nothing local to re-embed from. `reembed_and_write` raises a
-non-retryable `ApplicationError` (type `BackfillDeferred`) and `make backfill` fails on the
-first attempt rather than retrying a deferral six times.
-
-**Re-ingest instead.** An embedding-model change is handled by pointing `EMBED_MODEL` at the new
-model, recreating the index at the new dimension, and re-running ingestion from S3, which is the
-authoritative copy. That path works today and is what the deferral assumes you will do.
-
-The two commands below are kept as the intended shape of a blue/green swap, not a verified one:
+Use this when changing the embedding model (for example `voyage-3.5` to a model with different
+dimensions). There is no backfill: `knowledge_zc` stores pointers and embeddings but no text, so
+there is nothing to re-embed from. Re-ingest from S3, which holds the only copy, into a second
+collection, then switch retrieval to it.
 
 ```bash
-# Deferred: starts a BackfillWorkflow that fails fast on the first activity.
-make backfill MODEL=voyage-3-large
+# 1. Pin retrieval to the current collection so it stays live during the rebuild
+make cutover TO=knowledge_zc
 
-# The pointer flip itself is independent of backfill and does work, but only
-# against a target collection something else has already populated.
+# 2. In .env: KNOWLEDGE_COLLECTION=knowledge_v2, VOYAGE_MODEL=<new>, EMBED_DIM=<new dim>
+make restart-app
+make index
+
+# 3. Re-seed every object into the new collection
+make seed FILE=... KEY=...
+
+# 4. Once the knowledge_v2 index is READY, switch retrieval to it
 make cutover TO=knowledge_v2
+make query Q="test question"
 ```
 
-Retrieval reads the `temporal_config` collection to know which collection is active, so a
-cutover needs no restart. Do not run `make cutover` against an empty `knowledge_v2`: it will
-succeed and point every query at a collection with nothing in it.
+`cutover` reads the model and dimension from a document in the target and refuses an empty
+target. Retrieval and `read_span` read the `active` document in `temporal_config` on every query,
+so the hosted agent needs no restart. The old collection stays in place for rollback.
 
 ---
 
@@ -367,7 +355,7 @@ succeed and point every query at a collection with nothing in it.
 
 In production the trigger is an **AWS Lambda** subscribed to the S3 bucket's **ObjectCreated**
 event notifications. The Lambda calls `pipeline.lambda_handler`, which runs the **same**
-`handle_s3_event` code the trigger API's `/ingest-event` runs: parse the event, start one
+`handle_s3_event` code in `pipeline/trigger.py`: parse the event, start one
 `IngestWorkflow` per object. No Kafka, `sources` collection, or Stream Processing is involved.
 With the notification in place, seed with `NO_TRIGGER=1` so the upload is the only trigger.
 

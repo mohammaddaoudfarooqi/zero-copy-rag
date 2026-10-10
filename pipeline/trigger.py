@@ -1,7 +1,7 @@
 """Shared trigger logic: start an IngestWorkflow for an S3 object.
 
-Used by the HTTP endpoint (`trigger_api`), the AWS Lambda (`lambda_handler`) and the
-seed scripts, which upload and then start the ingest themselves. Re-uploads terminate any in-flight ingest for the same doc and start fresh, so the search
+Used by the AWS Lambda (`lambda_handler`) and the seed scripts, which upload and then
+start the ingest themselves. Re-uploads terminate any in-flight ingest for the same doc and start fresh, so the search
 index is updated in place rather than duplicated.
 """
 
@@ -26,9 +26,8 @@ async def get_client() -> Client:
 async def handle_s3_event(client: Client, event: dict | str | bytes) -> list[str]:
     """Parse an S3 ObjectCreated event and start an IngestWorkflow per object.
 
-    The single entrypoint shared by the event adapters: `trigger_api`'s /ingest-event and
-    the AWS Lambda (`lambda_handler`). Returns the started workflow ids (empty for a
-    non-object event such as S3's `s3:TestEvent`).
+    The entrypoint for event adapters such as the AWS Lambda (`lambda_handler`). Returns
+    the started workflow ids (empty for a non-object event such as S3's `s3:TestEvent`).
     """
     return [await start_ingest(client, ref) for ref in refs_from_s3_event(event)]
 

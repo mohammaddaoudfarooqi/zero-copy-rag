@@ -11,65 +11,61 @@ from pydantic import SecretStr
 if TYPE_CHECKING:  # the provider packages ship with the agent image, not with the tests
     from langchain_core.language_models import BaseChatModel
 
-# The Grove gateway host. It is also an entry in agent.yaml's egress allow-list;
-# the two have to agree or every model call fails with a network error rather
-# than an auth error, so keep them in sync.
-GROVE_HOST = "grove-gateway-prod.azure-api.net"
-
-_GROVE_BASE_URLS = {
-    "grove-anthropic": f"https://{GROVE_HOST}/grove-foundry-prod/anthropic",
-    "grove-openai": f"https://{GROVE_HOST}/grove-foundry-prod/openai/v1",
-}
-
 _DEFAULT_MODELS = {
-    "grove-anthropic": "claude-sonnet-5",
-    "grove-openai": "gpt-5.4",
     "anthropic": "claude-sonnet-5",
     "openai": "gpt-5.4",
     "gemini": "gemini-2.5-pro",
 }
 
-DEFAULT_PROVIDER = "grove-anthropic"
+DEFAULT_PROVIDER = "anthropic"
+
+# The host each provider calls when LLM_BASE_URL is unset. agent.yaml's egress
+# allow-list names the default provider's host; any other host, including a
+# gateway's, has to be added there before a deploy can reach it.
+PROVIDER_HOSTS = {
+    "anthropic": "api.anthropic.com",
+    "openai": "api.openai.com",
+    "gemini": "generativelanguage.googleapis.com",
+}
 
 
-def _grove_kwargs(provider: str, api_key: str) -> dict[str, Any]:
-    """Base URL and auth header for a Grove-routed model.
+def _gateway_kwargs(provider: str, api_key: str) -> dict[str, Any]:
+    """Base URL and optional auth header for a model reached through a gateway.
 
-    Grove's own documentation ships these as ``ChatGroveOpenAI`` and
-    ``ChatGroveAnthropic`` subclasses. Passing the same kwargs directly does the
-    same thing with less code, and it keeps the provider imports lazy: the
-    langchain provider packages are in the agent image, not in the test
-    environment, so nothing here may import them at module scope.
-
-    Grove authenticates on the ``api-key`` header. ``api_key`` is passed as well
-    because both client libraries require one to construct.
+    LLM_BASE_URL points an Anthropic- or OpenAI-compatible client at the gateway.
+    LLM_API_KEY_HEADER names a header to carry the key for gateways that read it
+    from somewhere other than the provider's usual auth header; ``api_key`` is
+    still passed because both client libraries require one to construct.
     """
-    return {
-        "base_url": _GROVE_BASE_URLS[provider],
-        "default_headers": {"api-key": api_key},
-    }
+    base_url = os.environ.get("LLM_BASE_URL", "").strip()
+    if not base_url:
+        return {}
+    if provider == "gemini":
+        raise RuntimeError("LLM_BASE_URL is supported for the anthropic and openai providers only")
+    extra: dict[str, Any] = {"base_url": base_url}
+    header = os.environ.get("LLM_API_KEY_HEADER", "").strip()
+    if header:
+        extra["default_headers"] = {header: api_key}
+    return extra
 
 
 def build_llm(temperature: float | None = None) -> "BaseChatModel":
     """Build the chat model named by LLM_PROVIDER, keyed by LLM_API_KEY.
 
     ``temperature`` is omitted from the request unless a caller passes one.
-    The current frontier models reject it outright: Grove returns
-    ``invalid_request_error: `temperature` is deprecated for this model`` for
-    claude-sonnet-5, which fails every invocation rather than degrading. Sending
-    a sampling parameter only when it was actually asked for keeps the default
-    path working across model generations.
+    The current frontier models reject it outright: claude-sonnet-5 answers
+    ``invalid_request_error: `temperature` is deprecated for this model``, which
+    fails every invocation rather than degrading. Sending a sampling parameter
+    only when it was actually asked for keeps the default path working across
+    model generations.
 
-    Supported providers: ``grove-anthropic`` (the default) and ``grove-openai``
-    route through the Grove gateway; ``anthropic``, ``openai`` and ``gemini``
-    call the provider directly and need their host added to the agent.yaml
-    egress allow-list first.
+    Supported providers: ``anthropic`` (the default), ``openai`` and ``gemini``.
+    Set LLM_BASE_URL (and LLM_API_KEY_HEADER if needed) to route anthropic or
+    openai through a compatible gateway.
 
     Do not wrap the result in ``app.llm()`` before handing it to
     ``app.deep_agent()``: deep_agent applies ``SecureWrappedLLM`` itself, and
-    double-wrapping registers the model twice under the same id. Grove's docs
-    say to pass the model to ``app.llm()``, which is right for a plain agent and
-    wrong for this one.
+    double-wrapping registers the model twice under the same id.
     """
     provider = os.environ.get("LLM_PROVIDER", DEFAULT_PROVIDER).strip().lower()
     if provider not in _DEFAULT_MODELS:
@@ -83,16 +79,16 @@ def build_llm(temperature: float | None = None) -> "BaseChatModel":
         raise RuntimeError("LLM_API_KEY is missing; add it to .env or project secrets")
 
     model = os.environ.get("LLM_MODEL") or _DEFAULT_MODELS[provider]
-    extra = _grove_kwargs(provider, api_key) if provider.startswith("grove-") else {}
+    extra = _gateway_kwargs(provider, api_key)
     if temperature is not None:
         extra["temperature"] = temperature
 
-    if provider in ("grove-anthropic", "anthropic"):
+    if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
         return ChatAnthropic(model_name=model, api_key=SecretStr(api_key), **extra)
 
-    if provider in ("grove-openai", "openai"):
+    if provider == "openai":
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(model=model, api_key=SecretStr(api_key), **extra)

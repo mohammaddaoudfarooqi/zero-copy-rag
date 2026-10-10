@@ -1,7 +1,7 @@
-# Tests for the seed uploaders: content-type resolution, and starting the ingest
+# Tests for the seed uploader: content-type resolution, and starting the ingest
 # after upload. Pins that an extension mimetypes cannot guess (e.g. .mdx) still
-# uploads as markdown, matching pipeline/seed_repo.py's bulk path rather than
-# getting rejected as application/octet-stream by the extractor factory.
+# uploads as markdown rather than getting rejected as application/octet-stream by
+# the extractor factory.
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from pipeline import seed, seed_repo
+from pipeline import seed
 
 
 class _FakeS3:
@@ -31,7 +31,6 @@ def started(monkeypatch):
         return [f"ingest-{i}" for i, _ in enumerate(batch)]
 
     monkeypatch.setattr(seed, "start_ingests", _fake)
-    monkeypatch.setattr(seed_repo, "start_ingests", _fake)
     return refs
 
 
@@ -98,20 +97,3 @@ def test_seed_no_trigger_only_uploads(tmp_path, monkeypatch, started):
 
     assert len(fake.calls) == 1
     assert started == []
-
-
-def test_seed_repo_starts_one_ingest_per_uploaded_file(tmp_path, monkeypatch, started):
-    docs = tmp_path / "docs"
-    (docs / "sub").mkdir(parents=True)
-    (docs / "a.md").write_text("# a\n")
-    (docs / "sub" / "b.mdx").write_text("# b\n")
-    (docs / "skip.txt").write_text("not markdown\n")
-
-    monkeypatch.setattr(seed_repo, "s3_client", lambda: _FakeS3())
-    monkeypatch.setattr(
-        sys, "argv", ["seed_repo", str(docs), "--bucket", "test-bucket", "--prefix", "p"]
-    )
-
-    seed_repo.main()
-
-    assert sorted(ref.key for ref in started) == ["p/a.md", "p/sub/b.mdx"]

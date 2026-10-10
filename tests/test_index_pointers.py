@@ -490,8 +490,8 @@ def test_activities_write_to_the_collection_they_were_given(monkeypatch):
     ignored `target_collection` entirely and resolved the default would still
     satisfy every other test in this file. Resolve through a registry keyed by
     name instead, and assert on which collection holds the documents afterwards.
-    The default collection must stay untouched: during a blue/green backfill it
-    is the one still serving live queries.
+    The default collection must stay untouched: during a re-ingest into a second
+    collection it is the one still serving live queries.
     """
     registry: dict[str, _FakeKnow] = {}
     staging = _FakeStaging([_staged(0), _staged(1)])
@@ -504,13 +504,13 @@ def test_activities_write_to_the_collection_they_were_given(monkeypatch):
     assert out["collection"] == "knowledge_green"
     assert [d["chunk_id"] for d in registry["knowledge_green"].docs] == ["d:0", "d:1"]
     assert settings.knowledge_collection not in registry, (
-        "the live default collection must not be touched by a backfill into another target"
+        "the live default collection must not be touched by a re-ingest into another target"
     )
 
 
 def test_clear_document_clears_the_collection_it_was_given(monkeypatch):
     """Same gap on the destructive path, where resolving the wrong collection
-    would delete a live document instead of the backfill target's copy."""
+    would delete a live document instead of the re-ingest target's copy."""
     registry: dict[str, _FakeKnow] = {}
     registry["knowledge_green"] = _FakeKnow([_indexed(i) for i in range(3)])
     registry[settings.knowledge_collection] = _FakeKnow([_indexed(i) for i in range(3)])
@@ -522,5 +522,5 @@ def test_clear_document_clears_the_collection_it_was_given(monkeypatch):
     assert out["removed"] == 3
     assert registry["knowledge_green"].docs == []
     assert len(registry[settings.knowledge_collection].docs) == 3, (
-        "clearing a backfill target must not clear the live collection"
+        "clearing a re-ingest target must not clear the live collection"
     )

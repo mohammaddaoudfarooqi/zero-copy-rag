@@ -1,4 +1,4 @@
-"""Environment-driven configuration for the Part 1 pipeline.
+"""Environment-driven configuration for the ingestion pipeline and the agent's tools.
 
 All settings come from environment variables (loaded from a local ``.env`` in dev).
 Nothing here reaches out to a network; construct ``settings`` once and pass the
@@ -53,9 +53,8 @@ class Settings(BaseSettings):
     mongodb_db: str = "temporal"
     chunks_collection: str = "chunks_staging"     # staged chunks between workflow stages
     knowledge_collection: str = "knowledge_zc"    # searchable pointers + vectors (no text)
-    knowledge_v2_collection: str = "knowledge_v2" # blue/green backfill target (green)
+    knowledge_v2_collection: str = "knowledge_v2" # second collection for a model change (re-ingest)
     config_collection: str = "temporal_config"         # cutover active-pointer doc
-    memory_collection: str = "agent_memory"       # deep-agent write-back
     vector_search_index_name: str = "temporalai_search_index"
 
     # ---- Voyage AI ----
@@ -67,9 +66,6 @@ class Settings(BaseSettings):
     # instead of depending on the shape of a credential.
     voyage_base_url: str = "https://ai.mongodb.com/v1"
     embed_dim: int = 1024
-
-    # ---- Service ports ----
-    trigger_api_port: int = 8088
 
     # ---- AWS / S3 ----
     aws_region: str = "us-east-1"

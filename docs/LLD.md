@@ -1,7 +1,7 @@
 # Low-Level Design
 
-**MongoDB x Temporal Partner Reference Architecture**
-Last updated: 2026-09-23
+**zero-copy-rag**
+Last updated: 2026-10-11
 
 ---
 
@@ -13,7 +13,7 @@ Last updated: 2026-09-23
 - [4. End-to-end data flow](#4-end-to-end-data-flow)
 - [5. Workflow design](#5-workflow-design)
   - [5.1 IngestWorkflow](#51-ingestworkflow)
-  - [5.2 BackfillWorkflow](#52-backfillworkflow)
+  - [5.2 Model change: re-ingest and cutover](#52-model-change-re-ingest-and-cutover)
 - [6. Activity design](#6-activity-design)
 - [7. Extractor system](#7-extractor-system)
 - [8. MongoDB data model](#8-mongodb-data-model)
@@ -49,9 +49,10 @@ anything. See section 11 for how that function is exposed to a query-side agent.
 
 Ingestion is triggered **directly** from an object-created event, no Kafka or message broker.
 The moment the object lands, an AWS Lambda subscribed to the bucket starts an `IngestWorkflow`
-(locally, `make seed` starts it right after the upload); once started, Temporal guarantees it runs to completion through failures. This
-removes a Kafka to Sink Connector to `sources` to Atlas Stream Processing chain and its
-operational overhead (see ADR `docs/decisions/0001-trigger-ingestion-directly-from-s3.md`).
+(locally, `make seed` starts it right after the upload); once started, Temporal guarantees it
+runs to completion through failures. The decisions behind this split are recorded in
+`docs/decisions/` (ADR 0001, pointers instead of text; ADR 0002, ingestion on Temporal and the
+agent on Agent Engine).
 
 The design is **source-agnostic** at two seams: the `S3Ref` data contract plus the
 `handle_s3_event` trigger core (adding a source means calling `start_ingest` from a new adapter),
@@ -70,7 +71,6 @@ pipeline/
 ├── models.py               <- S3Ref, Span, doc_id_for_uri, sha256_hex
 ├── clients.py               <- lazy clients: Mongo, Voyage, S3, SQS, cached per credential
 ├── trigger.py                <- shared trigger core: handle_s3_event + start_ingest
-├── trigger_api.py             <- HTTP trigger: POST /ingest-event (S3 envelope) + /ingest-trigger {bucket, key}
 ├── lambda_handler.py           <- AWS Lambda entrypoint for real S3 (same handle_s3_event core)
 ├── s3util.py                    <- parse an S3 ObjectCreated event (direct, SQS or SNS) into list[S3Ref]
 ├── search_index.py                <- idempotent Atlas Vector Search index management
@@ -78,28 +78,22 @@ pipeline/
 ├── retrieval.py                     <- $vectorSearch over the active collection; returns pointers, never text
 ├── spanio.py                         <- the only module that resolves a pointer back into text
 ├── cutover.py                         <- flip the active collection/index/model pointer
-├── trigger_backfill.py                 <- CLI: start BackfillWorkflow (re-embed active -> green)
-├── seed.py / seed_repo.py               <- dev utilities: upload a file / a markdown docs repo
+├── seed.py                              <- dev utility: upload a file and start its ingest
 ├── workflows/
-│   ├── ingest_workflow.py                <- IngestWorkflow: stage -> embed in batches -> index
-│   └── backfill_workflow.py               <- BackfillWorkflow: paginated re-embed, continue-as-new
+│   └── ingest_workflow.py                <- IngestWorkflow: stage -> embed in batches -> index
 ├── activities/
-│   ├── ingest.py                            <- fetch_and_stage_chunks, embed_staged_batch,
-│   │                                            index_document, clear_document
-│   └── backfill.py                           <- read_source_batch, reembed_and_write (deferred),
-│                                                 ensure_target_index
+│   └── ingest.py                            <- fetch_and_stage_chunks, embed_staged_batch,
+│                                                index_document, clear_document
 └── extractors/
     ├── base.py                                 <- Extractor ABC, char-to-byte-span conversion,
     │                                               window() splitter
     ├── factory.py                                <- get_extractor(): markdown only today
-    ├── markdown.py                                <- the only supported extractor
-    └── pdf.py / csv_ext.py / text.py               <- deferred stubs, each raises UnsupportedSource
-                                                        unconditionally
+    └── markdown.py                                <- the only supported extractor
 
 mongodb_agent_engine/
 ├── app.py                <- Agent Engine entrypoint: registers search_knowledge + read_span as tools,
 │                             wires two sub-agents (knowledge-retriever, source-reader)
-├── llm.py                <- model selection from LLM_PROVIDER / LLM_MODEL (Grove gateway by default)
+├── llm.py                <- model selection from LLM_PROVIDER / LLM_MODEL, optional gateway via LLM_BASE_URL
 └── README.md              <- SDK surface, capability boundary, deployment notes
 
 agent.yaml                  <- Agent Engine manifest: entrypoint, sandbox secret grants, egress allow-list
@@ -184,7 +178,6 @@ flowchart TD
 
     subgraph TRG[Trigger adapter]
         LAMBDA[AWS Lambda<br/>lambda_handler.py]
-        HOOK[trigger_api.py<br/>POST /ingest-event]
     end
 
     TRG -->|handle_s3_event: refs_from_s3_event, start_ingest per object| START
@@ -280,46 +273,24 @@ citable; leaving its old chunks searchable would mean the agent could cite text 
 `WorkflowIDConflictPolicy.TERMINATE_EXISTING`; a re-upload while an ingest is still running
 terminates the in-flight run and starts fresh, so there is never a duplicate or a race.
 
-### 5.2 BackfillWorkflow
+### 5.2 Model change: re-ingest and cutover
 
-**File:** `pipeline/workflows/backfill_workflow.py`
+There is no backfill. Re-embedding needs chunk text and `knowledge_zc` stores none, so a model
+change re-ingests from S3, which holds the only copy, into a second collection and then flips the
+active pointer.
 
-**Trigger:** model upgrade requiring a dimension change (e.g. `voyage-3.5` 1024-dim to a new
-model).
-
-**Current status: deferred and non-functional end to end.**
-`pipeline/activities/backfill.py::reembed_and_write` raises a non-retryable `ApplicationError`
-(type `BackfillDeferred`), because the searchable collection no longer stores chunk text to
-re-embed from. Starting a `BackfillWorkflow` runs `ensure_target_index` and the first
-`read_source_batch` successfully, then fails on the first `reembed_and_write` call without
-retrying. An embedding-model change is handled by re-ingesting from S3 instead (see
-`docs/RUNBOOK.md` section 8). This section describes the mechanism as written, not a verified
-operation.
-
-**Design pattern:** `continue_as_new`, the workflow re-starts itself with a cursor (`after_id`)
-after each batch, keeping Temporal history bounded regardless of collection size.
-
-**Stages per batch:**
-
-| Activity                      | Description                                                                                       |
-| ------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `ensure_target_index`         | Create the vector index on the green collection at the new dimension (once, before the first batch) |
-| `read_source_batch`           | Paginated read of the source (active) collection, 50 chunks at a time, sorted by `_id`             |
-| `reembed_and_write` (per doc) | Deferred: raises non-retryable `ApplicationError` (`BackfillDeferred`) unconditionally today     |
-
-**Blue/green cutover:** `BackfillWorkflow` is designed to write only to a green collection (for
-example `knowledge_v2`). The active pointer in `temporal_config` stays on the blue collection
-until an operator runs `make cutover TO=knowledge_v2`. `cutover.py` and `config_store.py` work
-independently of whether backfill itself ran; the flip just repoints `active_collection` at
-whatever documents already exist in the target.
+`IngestWorkflow` writes to `KNOWLEDGE_COLLECTION` unless a `target_collection` is passed, and
+`temporal_config.active` names the collection, index, model and dimension that retrieval and
+`read_span` use. `make cutover TO=<collection>` rewrites that document, reading the model and
+dimension from a document in the target, and refuses an empty target. The old collection stays
+in place for rollback. Steps are in `docs/RUNBOOK.md` section 8.
 
 ```mermaid
 flowchart LR
-    BLUE[(knowledge_zc<br/>blue, active)] -->|read_source_batch<br/>50 per page, no embeddings| BF[BackfillWorkflow<br/>continue_as_new per page]
-    BF -->|"reembed_and_write<br/>(deferred: fails fast today)"| GREEN[(knowledge_v2<br/>green)]
-    OP[Operator] -->|make cutover TO=knowledge_v2| CFG[(temporal_config<br/>active_collection)]
-    CFG -.->|retrieval reads the active pointer| BLUE
-    CFG -.->|after cutover| GREEN
+    BLUE[(knowledge_zc<br/>current model, active)] -.->|retrieval during the rebuild| AGENT[agent]
+    S3[(S3)] -->|"re-ingest with the new VOYAGE_MODEL"| GREEN[(knowledge_v2<br/>new model)]
+    OP[Operator] -->|make cutover TO=knowledge_v2| CFG[(temporal_config<br/>active pointer)]
+    CFG -.->|read on every query| AGENT
 ```
 
 ---
@@ -416,15 +387,11 @@ past whitespace at both edges. Default `chunk_size=1200`, `chunk_overlap=150` (c
 | Extension / MIME                     | Extractor          | Status                                                                    |
 | -------------------------------------- | -------------------- | ---------------------------------------------------------------------------- |
 | `.md`, `.markdown` / `text/markdown`, `text/x-markdown` | `MarkdownExtractor` | Supported. Splits on `#`/`##`/.../`######` headings, then character-windows each section; the heading itself is carried as a byte span (`heading_span`), never as text. |
-| `.pdf`                                | `PdfExtractor`      | Deferred. `ranges()` unconditionally raises `UnsupportedSource`; PDF text extraction does not produce a reproducible byte range in the source object. |
-| `.csv` / `text/csv`, `application/csv` | `CsvExtractor`      | Deferred. Same reason: rendered `header: value` records never appear verbatim in the file. |
-| anything else                         | `TextExtractor`     | Deferred. `ranges()` unconditionally raises `UnsupportedSource`.          |
+| anything else                         | none                | `UnsupportedSource`; the workflow clears the document. PDF and CSV are refused on purpose: extracted PDF text and rendered CSV records never appear verbatim in the file, so no byte range can reproduce them. |
 
 Resolution order: **file extension, then MIME type, then `UnsupportedSource`** if neither
-matches a registered markdown key. `factory.py` currently registers only the markdown extractor;
-`pdf.py`, `csv_ext.py`, and `text.py` exist as deferred stubs but are not wired into
-`_BY_EXT`/`_BY_MIME`, so any non-markdown key falls straight to the "unsupported source type"
-error regardless.
+matches a registered markdown key. `factory.py` registers only the markdown extractor, so any
+non-markdown key falls straight to the "unsupported source type" error.
 
 ---
 
@@ -484,11 +451,10 @@ itself signals the invariant: **z**ero-**c**opy.
 }
 ```
 
-### `knowledge_v2` collection (green, backfill target)
+### `knowledge_v2` collection (second collection for a model change)
 
-Same schema as `knowledge_zc`. Intended to be populated by `BackfillWorkflow`; as noted in
-section 5.2, that path is currently deferred and does not write real data yet. Becomes active
-after `make cutover`.
+Same schema as `knowledge_zc`. Filled by re-ingesting from S3 with the new model (section 5.2),
+and active after `make cutover TO=knowledge_v2`.
 
 ### `temporal_config` collection
 
@@ -504,10 +470,6 @@ Single document: the active collection/index/model pointer. Read by `retrieval.p
   "dim": 1024
 }
 ```
-
-### `agent_memory` collection
-
-Reserved for agent memory. **Not currently written** by any code path in this repository.
 
 ---
 
@@ -528,9 +490,7 @@ Created idempotently by `ensure_vector_index` at the end of every `index_documen
 ```
 
 The `filter` fields let retrieval scope to a document or source URI without a full scan.
-`ensure_vector_index` lists existing indexes and skips creation if present. `BackfillWorkflow`
-calls `ensure_target_index` once before writing to the green collection; that index-creation call
-does not depend on `reembed_and_write` being implemented.
+`ensure_vector_index` lists existing indexes and skips creation if present.
 
 ---
 
@@ -557,26 +517,10 @@ async def start_ingest(client, ref: S3Ref) -> str:
 `refs_from_s3_event` (`s3util.py`) parses the standard `Records[*].s3` envelope (SQS- and SNS-wrapped
 bodies are unwrapped, and `s3:TestEvent` yields no refs), URL-decoding the key.
 
-### HTTP: `trigger_api.py`
+### Local dev: `seed.py`
 
-For any event source that can POST the S3 envelope, `POST /ingest-event` calls the same core. The
-endpoint reuses one cached Temporal client (FastAPI lifespan):
-
-```python
-@app.post("/ingest-event")
-async def ingest_event(request: Request) -> dict:
-    event = await request.json()
-    started = await handle_s3_event(request.app.state.temporal, event)
-    return {"started": started}
-```
-
-`POST /ingest-trigger {bucket, key}` starts one ingest for an object already in the bucket, for
-scripted or manual re-ingests.
-
-### Local dev: `seed.py` and `seed_repo.py`
-
-Nothing emits object-created events locally, so the seed scripts start the workflow themselves:
-each uploads its file or files, then calls `start_ingests(refs)` (`trigger.py`), a synchronous
+Nothing emits object-created events locally, so `seed.py` starts the workflow itself: it uploads
+the file, then calls `start_ingests(refs)` (`trigger.py`), a synchronous
 wrapper over `start_ingest`. The ref carries the ETag and size from the upload. `--no-trigger`
 (`NO_TRIGGER=1` through `make`) skips the start, for a bucket whose event notification will start
 it instead; if both fire, the two starts share one workflow id and the later replaces the earlier.
@@ -627,14 +571,14 @@ flowchart LR
     subgraph EGRESS[Egress allow-list]
         VOY[ai.mongodb.com<br/>query embeddings]
         S3[s3.us-east-1.amazonaws.com<br/>bucket.s3.us-east-1<br/>.amazonaws.com]
-        GROVE[grove-gateway-prod.azure-api.net<br/>model calls]
+        LLMHOST[api.anthropic.com<br/>model calls]
     end
 
     SK --> VOY
     SK -->|$vectorSearch, pointers only| ATLAS[(Atlas knowledge_zc)]
     RS -->|resolve chunk_id| ATLAS
     RS -->|ranged GET, etag + sha256 checked| S3
-    POD -->|model calls for all three agents,<br/>routed through the OE| GROVE
+    POD -->|model calls for all three agents,<br/>routed through the OE| LLMHOST
 ```
 
 The Atlas cluster is reached over the MongoDB wire protocol, which the platform admits through
@@ -658,7 +602,8 @@ promising `chunk_id`s, delegate those to `source-reader`, and quote only text th
 `status == "ok"`.
 
 The model is chosen in `mongodb_agent_engine/llm.py` from `LLM_PROVIDER` (default
-`grove-anthropic`, model `claude-sonnet-5`) with an optional `LLM_MODEL` override. The raw
+`anthropic`, model `claude-sonnet-5`) with an optional `LLM_MODEL` override, and optionally
+routed through a compatible gateway with `LLM_BASE_URL` and `LLM_API_KEY_HEADER`. The raw
 model is passed to `app.deep_agent`, which wraps it in the SDK's `SecureWrappedLLM`. That wrapper
 routes every model call through the Orchestration Engine to the Tool Pod, which is why
 `LLM_API_KEY` is granted to the tool sandbox and the agent sandbox holds no secret at all.
@@ -719,9 +664,8 @@ All settings live in `.env` (loaded by `pipeline/config.py` via Pydantic Setting
 | `MONGODB_DB`              | `temporal`               | Database name                                     |
 | `CHUNKS_COLLECTION`       | `chunks_staging`         | Transient staging between workflow stages         |
 | `KNOWLEDGE_COLLECTION`    | `knowledge_zc`           | Active (blue) searchable pointer + vector store    |
-| `KNOWLEDGE_V2_COLLECTION` | `knowledge_v2`           | Green backfill target                             |
+| `KNOWLEDGE_V2_COLLECTION` | `knowledge_v2`           | Second collection for a model change              |
 | `CONFIG_COLLECTION`       | `temporal_config`         | Active pointer document                           |
-| `MEMORY_COLLECTION`       | `agent_memory`            | Reserved for agent memory (not yet written)       |
 | `VOYAGE_API_KEY`          | (none)                   | Voyage AI key (embeddings)                        |
 | `VOYAGE_MODEL`            | `voyage-3.5`              | Embedding model (1024-dim)                        |
 | `VOYAGE_BASE_URL`         | `https://ai.mongodb.com/v1` | Voyage endpoint, passed explicitly (see `pipeline/clients.py`) |
@@ -731,24 +675,25 @@ All settings live in `.env` (loaded by `pipeline/config.py` via Pydantic Setting
 | `TEMPORAL_ADDRESS`        | `localhost:7233`          | Temporal server address                           |
 | `TEMPORAL_NAMESPACE`      | `default`                 | Temporal namespace                                |
 | `TEMPORAL_TASK_QUEUE`     | `temporal-pipeline`        | Worker task queue                                 |
-| `TRIGGER_API_PORT`        | `8088`                    | Trigger API port                                  |
 | `AWS_REGION`              | `us-east-1`               | AWS region for the S3 client                      |
 | `AWS_ACCESS_KEY_ID`       | (none)                    | Explicit creds (blank falls back to boto3's chain) |
 | `AWS_SECRET_ACCESS_KEY`   | (none)                    | Explicit creds (blank falls back to boto3's chain) |
 | `S3_BUCKET`               | (none)                    | Source bucket                                     |
 
-The hosted agent reads three more variables from its environment, not from `pipeline/config.py`
+The hosted agent reads five more variables from its environment, not from `pipeline/config.py`
 (`mongodb_agent_engine/llm.py`):
 
 | Variable       | Default            | Description                                                                 |
 | -------------- | ------------------ | --------------------------------------------------------------------------- |
-| `LLM_PROVIDER` | `grove-anthropic`  | `grove-anthropic`, `grove-openai`, `anthropic`, `openai` or `gemini`        |
-| `LLM_MODEL`    | per provider       | Overrides the provider's default model (`claude-sonnet-5` for `grove-anthropic`) |
-| `LLM_API_KEY`  | (none)             | Key for the selected provider; the Grove key under a `grove-*` provider     |
+| `LLM_PROVIDER` | `anthropic`        | `anthropic`, `openai` or `gemini`                                           |
+| `LLM_MODEL`    | per provider       | Overrides the provider's default model (`claude-sonnet-5` for `anthropic`)  |
+| `LLM_API_KEY`  | (none)             | Key for the selected provider or gateway                                    |
+| `LLM_BASE_URL` | (none)             | Anthropic- or OpenAI-compatible gateway URL; blank calls the provider       |
+| `LLM_API_KEY_HEADER` | (none)       | Extra header that carries `LLM_API_KEY`, for gateways that need one         |
 
 Settings removed with the old agent: `openai_api_key`, `agent_model`, `agent_max_turns`,
-`agent_api_port`, `voyage_rerank_model`. `trigger_api_port` is unrelated to the agent removal and
-remains.
+`agent_api_port`, `voyage_rerank_model`. `trigger_api_port` went with the HTTP trigger, which had no
+remaining caller.
 
 ---
 
@@ -783,10 +728,10 @@ There is no `sources` collection, no sink connector, and no change-stream watche
 - **RDBMS / CDC (Debezium, etc.):** a small consumer receives change events and calls
   `start_ingest`. For inline row content, extend the contract with a payload and branch in
   `fetch_and_stage_chunks`, keeping in mind the byte-reproducibility constraint from section 7.
-- **Existing Atlas data (change stream):** an Atlas trigger or a watcher process calls the
-  `/ingest-event` endpoint (or `start_ingest`) per change.
-- **Webhook / HTTP (Notion, GitHub, etc.):** POST to `trigger_api`; large payloads upload to S3
-  first and construct an `S3Ref`, small ones inline.
+- **Existing Atlas data (change stream):** an Atlas trigger or a watcher process calls
+  `start_ingest` per change.
+- **Webhook / HTTP (Notion, GitHub, etc.):** a small authenticated HTTP handler (none ships here)
+  uploads the payload to S3, constructs an `S3Ref` and calls `start_ingest`.
 
 ### Multi-source worker scaling
 
@@ -806,8 +751,8 @@ uv run python -m pipeline.worker &   # worker N
 
 The extractor factory (`pipeline/extractors/factory.py`) is the intended extension point for new
 file or data types. Workflows and activities are type-agnostic: they receive `bytes` and call
-`get_extractor(key, content_type).chunk(body)`. Markdown is the only format actually wired in
-today; everything else is a deferred stub (section 7).
+`get_extractor(key, content_type).chunk(body)`. Markdown is the only format wired in today;
+everything else is refused (section 7).
 
 ### Adding a new extractor
 
@@ -824,9 +769,6 @@ today; everything else is a deferred stub (section 7).
 | Extractor           | Status    | `ranges()` behavior                                          |
 | --------------------- | ----------- | ---------------------------------------------------------------- |
 | `MarkdownExtractor` | Supported | Splits on `#`/`##`/`###` headings; window-splits long sections |
-| `PdfExtractor`      | Deferred  | Unconditionally raises `UnsupportedSource`                     |
-| `CsvExtractor`      | Deferred  | Unconditionally raises `UnsupportedSource`                     |
-| `TextExtractor`     | Deferred  | Unconditionally raises `UnsupportedSource`                     |
 
 ### Chunking parameter tuning (once/if a format is un-deferred)
 
@@ -884,9 +826,8 @@ class FullSyncWorkflow:
 
 ### Model A/B testing
 
-The intended pattern is to run `BackfillWorkflow` into a third collection with a different model
-and point a shadow agent at it to compare retrieval quality before cutting over. This depends on
-`reembed_and_write` being implemented; today it is a deferred stub (section 5.2).
+Re-ingest into a third collection with a different `VOYAGE_MODEL` (section 5.2) and point a
+shadow agent's active pointer at it to compare retrieval quality before cutting over.
 
 ### Observability hooks
 

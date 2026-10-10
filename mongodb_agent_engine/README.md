@@ -182,27 +182,25 @@ Model selection lives in `mongodb_agent_engine/llm.py`, driven by `LLM_PROVIDER`
 an optional `LLM_MODEL` override. The platform's convention is that provider and
 model stay out of `agent.yaml`.
 
-Model calls go through the Grove gateway. `LLM_PROVIDER` defaults to
-`grove-anthropic` (`claude-sonnet-5`); `grove-openai` is the other gateway
-route, and `anthropic`, `openai` and `gemini` call the provider directly.
-`LLM_API_KEY` holds the Grove API key under a `grove-*` provider. Grove
-authenticates on an `api-key` header rather than the provider's own scheme, so
-the model is built with `base_url` pointed at the gateway and that header set.
-Grove's documentation packages this as `ChatGroveOpenAI` and `ChatGroveAnthropic`
-subclasses; `llm.py` passes the same kwargs directly instead, which keeps the
-provider imports inside the function where the test environment can do without
-them.
+`LLM_PROVIDER` defaults to `anthropic` (`claude-sonnet-5`); `openai` and `gemini`
+are the other choices. `LLM_API_KEY` holds the key for whichever is selected.
+To route `anthropic` or `openai` through a compatible gateway, set `LLM_BASE_URL`
+to the gateway's URL and, if it reads the key from its own header rather than the
+provider's auth scheme, name that header in `LLM_API_KEY_HEADER`. `llm.py` passes
+these as `base_url` and `default_headers` to the provider class, inside the
+function, so the test environment can do without the provider packages.
 
-`grove-gateway-prod.azure-api.net` is the only model host in the egress
-allow-list. The direct provider hosts are deliberately absent, so switching
-`LLM_PROVIDER` to `anthropic`, `openai` or `gemini` needs
-`agentengine agent egress add <host>:443` first. Two tests in `tests/test_llm.py`
-pin both halves of that: the gateway host must be in `agent.yaml`, and the three
-direct hosts must not be.
+`api.anthropic.com` is the only model host in the egress allow-list. Switching
+`LLM_PROVIDER`, or setting `LLM_BASE_URL`, needs that host added with
+`agentengine agent egress add <host>:443` first. For a hosted deploy through a
+gateway, also list `LLM_BASE_URL` and `LLM_API_KEY_HEADER` under
+`sandboxes.tool.secrets`, since `.env` never ships. Two tests in
+`tests/test_egress.py` pin the default: the default provider's host must be in
+`agent.yaml`, and the other providers' hosts must not be.
 
-One place Grove's documentation does not apply here. It says to pass the model
-to `app.llm()`. That is right for a plain agent and wrong for this one, because
-`deep_agent()` applies `SecureWrappedLLM` itself.
+Pass the model straight to `app.deep_agent()`, not through `app.llm()` first:
+`deep_agent()` applies `SecureWrappedLLM` itself, and wrapping twice registers the
+model under the same id twice.
 
 ### Credential resolution timing
 
@@ -227,7 +225,7 @@ citations from the hosted Tool Pod. In order, from the repository root:
    stripped from the source archive unconditionally.
 3. Set deployed secrets, which are separate from `.env` and never read from it:
    `agentengine secret set MONGODB_URI`, then `MONGODB_DB`, `VOYAGE_API_KEY`,
-   `LLM_API_KEY` (the Grove key), `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
+   `LLM_API_KEY`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
    Run `agentengine secret sync` afterwards, or pass `--sync` to the last one.
    `agentengine deploy` also refuses to run until every populated `.env` key
    exists as a secret, config included; `grep` the keys into
@@ -246,7 +244,7 @@ citations from the hosted Tool Pod. In order, from the repository root:
 ### What the local run actually showed
 
 All four egress entries were exercised: `ai.mongodb.com` for embeddings,
-`grove-gateway-prod.azure-api.net` for the model, and both S3 hosts for
+the model gateway used at the time, and both S3 hosts for
 `read_span`. The scoped `sandboxes.*.secrets` lists worked; the scaffold's
 `["*"]` was not needed. `features.deep_agent: true` was honoured, and the Tool
 Pod registered the two project tools alongside the eight deep-agent built-ins.
@@ -267,7 +265,7 @@ region is regional already, so the fix is a no-op outside `us-east-1`.
 The hosted Tool Pod's proxy behaves like the dev-mode one. The first question
 sent through `agentengine invoke` came back with verbatim quotes from chunks 38 and
 40, and each quote was checked against `read_span` afterwards. That exercises
-Atlas, Voyage, Grove and the regional S3 host from inside the deployed
+Atlas, Voyage, the model host and the regional S3 host from inside the deployed
 boundary.
 
 Two things the local stack hid, both caused by dev bind-mounting the repo:

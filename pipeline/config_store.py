@@ -1,8 +1,8 @@
 """Cutover pointer: which collection + index + model retrieval should read.
 
 A single doc `{_id:'active', active_collection, active_index, model, dim}` in `temporal_config`.
-Backfill writes a new (green) collection; `cutover.py` flips this pointer atomically for
-readers, giving a blue/green swap on embedding-model changes.
+A model change re-ingests from S3 into a second collection; `cutover.py` then flips this
+pointer atomically for readers, giving a blue/green swap.
 """
 
 from __future__ import annotations

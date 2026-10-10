@@ -25,15 +25,14 @@ def allowed() -> set[str]:
     return {rule["fqdn"] for rule in config["network"]["egress"]}
 
 
-def test_the_grove_gateway_is_reachable(allowed):
-    assert llm.GROVE_HOST in allowed
+def test_the_default_model_provider_is_reachable(allowed):
+    assert llm.PROVIDER_HOSTS[llm.DEFAULT_PROVIDER] in allowed
 
 
-def test_direct_model_providers_are_deliberately_unreachable(allowed):
-    """Grove is the only model route. This pins the decision rather than a typo."""
-    assert allowed.isdisjoint(
-        {"api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com"}
-    )
+def test_only_the_default_model_provider_is_reachable(allowed):
+    """Other providers stay closed until someone switches to them on purpose."""
+    others = {h for p, h in llm.PROVIDER_HOSTS.items() if p != llm.DEFAULT_PROVIDER}
+    assert allowed.isdisjoint(others)
 
 
 def test_the_voyage_endpoint_is_reachable(allowed):

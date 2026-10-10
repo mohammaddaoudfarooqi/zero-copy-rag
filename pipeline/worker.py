@@ -1,4 +1,4 @@
-"""Temporal worker: hosts the Part 1 workflows and activities.
+"""Temporal worker: hosts the ingestion workflow and its activities.
 
 Run:  uv run python -m pipeline.worker
 """

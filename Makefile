@@ -1,4 +1,4 @@
-# Temporal x MongoDB PRA: local dev orchestration.
+# zero-copy-rag: local dev orchestration.
 # Run `make` (or `make help`) to list targets.
 
 SHELL := /bin/bash
@@ -13,31 +13,21 @@ LOGDIR := .local
 # Optional args:
 #   make seed FILE=./doc.md KEY=docs/doc.md
 #   make query Q="what does queryable encryption protect?"
-#   make backfill MODEL=voyage-3-large
-#   make seed-docs
 FILE ?= seed/ethical_governance.md
 KEY ?=
 Q ?= how does role-based access control protect constitutional principles?
-MODEL ?= voyage-3-large
-REPO_DIR ?=
-PREFIX ?= temporalio-documentation-md-only
-DRY_RUN ?=
-REPO_URL ?= https://github.com/temporalio/documentation.git
-REPO_REF ?= main
-CHECKOUT_DIR ?= .local/imports/temporal-documentation
-DELAY_MS ?= 250
 
 .DEFAULT_GOAL := help
 
 .PHONY: help
 help: ## Show this help
-	@echo "Temporal x MongoDB PRA: local dev"
+	@echo "zero-copy-rag: local dev"
 	@echo
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 	@echo
 	@echo "Demo:       make demo    (start + index + seed + local Playground)"
-	@echo "One-shot:   make start   (temporal + worker + trigger-api)"
+	@echo "One-shot:   make start   (temporal + worker)"
 	@echo "Then:       make index (once) ; make seed ; make playground"
 	@echo "Teardown:   make stop"
 
@@ -82,10 +72,6 @@ temporal: ## Run the Temporal dev server (foreground; Web UI :8233)
 worker: check-env ## Run the Temporal worker (foreground)
 	$(PY) -m pipeline.worker
 
-.PHONY: trigger-api
-trigger-api: check-env ## Run the trigger HTTP endpoint (/ingest-trigger {bucket,key}; /ingest-event S3 envelope)
-	$(PY) -m pipeline.trigger_api
-
 # ---------------------------------------------------------------------------
 # One-command start / stop
 # ---------------------------------------------------------------------------
@@ -105,10 +91,9 @@ start: install .env ## Start everything in the background (NO_WORKER=1 skips the
 	else \
 		$(MAKE) -s _bg NAME=worker CMD="$(PY) -u -m pipeline.worker"; \
 	fi
-	@$(MAKE) -s _bg NAME=trigger-api CMD="$(PY) -u -m pipeline.trigger_api"
 	@sleep 2
 	@echo
-	@echo "started. Temporal UI: http://localhost:8233 | Trigger API: http://localhost:8088"
+	@echo "started. Temporal UI: http://localhost:8233"
 	@if [ -n "$(NO_WORKER)" ]; then echo "NOTE: worker NOT started. Run 'make worker' in a separate foreground terminal (kill it mid-ingest to demo durability)"; fi
 	@echo "next: 'make index' (once) ; 'make seed' ; 'make playground'"
 	@echo "logs: 'make app-logs'   stop: 'make stop'"
@@ -127,11 +112,9 @@ stop: stop-app ## Stop background app processes and Temporal
 	fi
 
 .PHONY: stop-app
-stop-app: ## Stop worker + trigger-api (leaves Temporal up)
-	@-for pat in pipeline.worker pipeline.trigger_api; do \
-		pkill -f "$$pat" 2>/dev/null && echo "stopped $$pat" || true; \
-	done
-	@-for p in worker trigger-api; do \
+stop-app: ## Stop the worker (leaves Temporal up)
+	@-pkill -f pipeline.worker 2>/dev/null && echo "stopped pipeline.worker" || true
+	@-for p in worker; do \
 		if [ -f $(LOGDIR)/$$p.pid ]; then kill $$(cat $(LOGDIR)/$$p.pid) 2>/dev/null || true; rm -f $(LOGDIR)/$$p.pid; fi; \
 	done
 
@@ -140,13 +123,12 @@ restart-app: stop-app ## Restart app processes (e.g. after editing .env). Leaves
 	@mkdir -p $(LOGDIR)
 	@sleep 1
 	@$(MAKE) -s _bg NAME=worker CMD="$(PY) -u -m pipeline.worker"
-	@$(MAKE) -s _bg NAME=trigger-api CMD="$(PY) -u -m pipeline.trigger_api"
 	@sleep 2
 	@echo "restarted app processes with current .env"
 
 .PHONY: app-logs
-app-logs: ## Tail worker + trigger-api + temporal logs
-	@tail -n +1 -f $(LOGDIR)/worker.log $(LOGDIR)/trigger-api.log $(LOGDIR)/temporal.log 2>/dev/null
+app-logs: ## Tail worker + temporal logs
+	@tail -n +1 -f $(LOGDIR)/worker.log $(LOGDIR)/temporal.log 2>/dev/null
 
 # ---------------------------------------------------------------------------
 # Drive the pipeline
@@ -155,10 +137,6 @@ app-logs: ## Tail worker + trigger-api + temporal logs
 .PHONY: seed
 seed: check-env ## Upload a file to S3_BUCKET and start its IngestWorkflow (FILE=...; NO_TRIGGER=1 uploads only)
 	$(PY) -m pipeline.seed $(if $(FILE),--file $(FILE)) $(if $(KEY),--key $(KEY)) $(if $(NO_TRIGGER),--no-trigger)
-
-.PHONY: seed-docs
-seed-docs: check-env ## Clone/update Temporal docs repo, upload only .md/.mdx files and start their ingests
-	$(PY) -m pipeline.seed_repo $(if $(REPO_DIR),$(REPO_DIR),) $(if $(REPO_URL),--repo-url $(REPO_URL)) $(if $(CHECKOUT_DIR),--checkout-dir $(CHECKOUT_DIR)) --ref $(REPO_REF) --prefix $(PREFIX) --delay-ms $(DELAY_MS) $(if $(DRY_RUN),--dry-run) $(if $(NO_TRIGGER),--no-trigger)
 
 # The query agent runs in the Atlas Agent Engine local stack, not as a host process.
 # Its tools read the same S3_BUCKET and Atlas collection the worker writes.
@@ -173,10 +151,6 @@ demo: start index seed playground ## Local end-to-end demo: pipeline, index, see
 query: check-env ## Vector-search the active collection (Q="your question")
 	$(PY) -m infra.query_atlas "$(Q)"
 
-.PHONY: backfill
-backfill: check-env ## DEFERRED (see docs/RUNBOOK.md): fails fast. Re-ingest from S3 instead.
-	$(PY) -m pipeline.trigger_backfill --model $(MODEL)
-
 .PHONY: cutover
-cutover: check-env ## DEFERRED (see docs/RUNBOOK.md): the pointer flip works, but nothing backfills a target to flip to.
+cutover: check-env ## Point retrieval at another collection (TO=...), after re-ingesting into it. Refuses an empty one
 	$(PY) -m pipeline.cutover $(if $(TO),--to $(TO))

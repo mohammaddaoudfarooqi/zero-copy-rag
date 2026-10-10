@@ -140,8 +140,12 @@ AWS_SECRET_ACCESS_KEY=<your-aws-secret-access-key>
 
 Leave both keys blank to fall back to boto3's standard credential chain (a profile or a role).
 
-For the Playground, also set `LLM_API_KEY`. With the default `LLM_PROVIDER=grove-anthropic`
-it holds the Grove gateway key. The pipeline does not read it; only the agent does. The
+For the Playground, also set `LLM_API_KEY`. With the default `LLM_PROVIDER=anthropic` it holds
+an Anthropic API key. The pipeline does not read it; only the agent does. To route model calls
+through an Anthropic- or OpenAI-compatible gateway instead, set `LLM_BASE_URL`, and
+`LLM_API_KEY_HEADER` if the gateway reads the key from its own header. A hosted deploy through
+a gateway also needs its host added to `network.egress` in `agent.yaml`, and both settings
+listed under `sandboxes.tool.secrets`; keep those edits out of commits if the gateway is private. The
 searchable collection defaults to `knowledge_zc` (`pipeline/config.py`,
 `knowledge_collection`).
 

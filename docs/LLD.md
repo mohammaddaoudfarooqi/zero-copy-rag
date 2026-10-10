@@ -98,7 +98,7 @@ pipeline/
 mongodb_agent_engine/
 ├── app.py                <- Agent Engine entrypoint: registers search_knowledge + read_span as tools,
 │                             wires two sub-agents (knowledge-retriever, source-reader)
-├── llm.py                <- model selection from LLM_PROVIDER / LLM_MODEL (Grove gateway by default)
+├── llm.py                <- model selection from LLM_PROVIDER / LLM_MODEL, optional gateway via LLM_BASE_URL
 └── README.md              <- SDK surface, capability boundary, deployment notes
 
 agent.yaml                  <- Agent Engine manifest: entrypoint, sandbox secret grants, egress allow-list
@@ -609,14 +609,14 @@ flowchart LR
     subgraph EGRESS[Egress allow-list]
         VOY[ai.mongodb.com<br/>query embeddings]
         S3[s3.us-east-1.amazonaws.com<br/>bucket.s3.us-east-1<br/>.amazonaws.com]
-        GROVE[grove-gateway-prod.azure-api.net<br/>model calls]
+        LLMHOST[api.anthropic.com<br/>model calls]
     end
 
     SK --> VOY
     SK -->|$vectorSearch, pointers only| ATLAS[(Atlas knowledge_zc)]
     RS -->|resolve chunk_id| ATLAS
     RS -->|ranged GET, etag + sha256 checked| S3
-    POD -->|model calls for all three agents,<br/>routed through the OE| GROVE
+    POD -->|model calls for all three agents,<br/>routed through the OE| LLMHOST
 ```
 
 The Atlas cluster is reached over the MongoDB wire protocol, which the platform admits through
@@ -640,7 +640,8 @@ promising `chunk_id`s, delegate those to `source-reader`, and quote only text th
 `status == "ok"`.
 
 The model is chosen in `mongodb_agent_engine/llm.py` from `LLM_PROVIDER` (default
-`grove-anthropic`, model `claude-sonnet-5`) with an optional `LLM_MODEL` override. The raw
+`anthropic`, model `claude-sonnet-5`) with an optional `LLM_MODEL` override, and optionally
+routed through a compatible gateway with `LLM_BASE_URL` and `LLM_API_KEY_HEADER`. The raw
 model is passed to `app.deep_agent`, which wraps it in the SDK's `SecureWrappedLLM`. That wrapper
 routes every model call through the Orchestration Engine to the Tool Pod, which is why
 `LLM_API_KEY` is granted to the tool sandbox and the agent sandbox holds no secret at all.
@@ -718,14 +719,16 @@ All settings live in `.env` (loaded by `pipeline/config.py` via Pydantic Setting
 | `AWS_SECRET_ACCESS_KEY`   | (none)                    | Explicit creds (blank falls back to boto3's chain) |
 | `S3_BUCKET`               | (none)                    | Source bucket                                     |
 
-The hosted agent reads three more variables from its environment, not from `pipeline/config.py`
+The hosted agent reads five more variables from its environment, not from `pipeline/config.py`
 (`mongodb_agent_engine/llm.py`):
 
 | Variable       | Default            | Description                                                                 |
 | -------------- | ------------------ | --------------------------------------------------------------------------- |
-| `LLM_PROVIDER` | `grove-anthropic`  | `grove-anthropic`, `grove-openai`, `anthropic`, `openai` or `gemini`        |
-| `LLM_MODEL`    | per provider       | Overrides the provider's default model (`claude-sonnet-5` for `grove-anthropic`) |
-| `LLM_API_KEY`  | (none)             | Key for the selected provider; the Grove key under a `grove-*` provider     |
+| `LLM_PROVIDER` | `anthropic`        | `anthropic`, `openai` or `gemini`                                           |
+| `LLM_MODEL`    | per provider       | Overrides the provider's default model (`claude-sonnet-5` for `anthropic`)  |
+| `LLM_API_KEY`  | (none)             | Key for the selected provider or gateway                                    |
+| `LLM_BASE_URL` | (none)             | Anthropic- or OpenAI-compatible gateway URL; blank calls the provider       |
+| `LLM_API_KEY_HEADER` | (none)       | Extra header that carries `LLM_API_KEY`, for gateways that need one         |
 
 Settings removed with the old agent: `openai_api_key`, `agent_model`, `agent_max_turns`,
 `agent_api_port`, `voyage_rerank_model`. `trigger_api_port` went with the HTTP trigger, which had no

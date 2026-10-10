@@ -65,9 +65,8 @@ network:
       ports: [443]
     - fqdn: temporal-agentic.s3.us-east-1.amazonaws.com
       ports: [443]
-    # Model calls. Every provider goes through the Grove gateway, so the direct
-    # provider hosts (api.anthropic.com, api.openai.com,
-    # generativelanguage.googleapis.com) are deliberately absent. Setting
-    # LLM_PROVIDER to a direct provider therefore also needs an egress entry.
-    - fqdn: grove-gateway-prod.azure-api.net
+    # Model calls for the default provider (LLM_PROVIDER=anthropic). Switching to
+    # openai or gemini, or routing through a gateway with LLM_BASE_URL, needs that
+    # host added here before deploying (see llm.PROVIDER_HOSTS).
+    - fqdn: api.anthropic.com
       ports: [443]

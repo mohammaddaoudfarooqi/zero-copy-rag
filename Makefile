@@ -13,7 +13,6 @@ LOGDIR := .local
 # Optional args:
 #   make seed FILE=./doc.md KEY=docs/doc.md
 #   make query Q="what does queryable encryption protect?"
-#   make backfill MODEL=voyage-3-large
 #   make seed-docs
 FILE ?= seed/ethical_governance.md
 KEY ?=
@@ -165,10 +164,6 @@ demo: start index seed playground ## Local end-to-end demo: pipeline, index, see
 query: check-env ## Vector-search the active collection (Q="your question")
 	$(PY) -m infra.query_atlas "$(Q)"
 
-.PHONY: backfill
-backfill: check-env ## DEFERRED (see docs/RUNBOOK.md): fails fast. Re-ingest from S3 instead.
-	$(PY) -m pipeline.trigger_backfill --model $(MODEL)
-
 .PHONY: cutover
-cutover: check-env ## DEFERRED (see docs/RUNBOOK.md): the pointer flip works, but nothing backfills a target to flip to.
+cutover: check-env ## Point retrieval at another collection (TO=...), after re-ingesting into it. Refuses an empty one
 	$(PY) -m pipeline.cutover $(if $(TO),--to $(TO))

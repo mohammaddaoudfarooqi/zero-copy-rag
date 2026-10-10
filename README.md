@@ -78,7 +78,7 @@ flowchart LR
 
 | Concern                                                       | Owner                     |
 | ------------------------------------------------------------- | ------------------------- |
-| Orchestration, retries, checkpointing, backfill, resumability | **Temporal**              |
+| Orchestration, retries, checkpointing, resumability           | **Temporal**              |
 | Vector index, pointers, agent memory & state                  | **MongoDB Atlas**         |
 | Embeddings                                                    | **MongoDB Voyage AI**     |
 | Agent reasoning & answers                                     | **Atlas Agent Engine**    |
@@ -91,7 +91,7 @@ flowchart LR
 Database: temporal
 ├── chunks_staging       ← intermediate chunks (spans, not text) during IngestWorkflow
 ├── knowledge_zc         ← embeddings + source pointers, Atlas Vector Search index (active), no text
-├── knowledge_v2         ← blue/green target for BackfillWorkflow (deferred)
+├── knowledge_v2         ← second collection for a model change (re-ingest, then cutover)
 ├── temporal_config      ← active collection/index pointer (flipped by cutover)
 └── agent_memory         ← reserved for agent memory (not yet written)
 ```
@@ -267,11 +267,9 @@ mdb-temporal-pra/
 │   ├── retrieval.py                ← vector search, returns pointers, never text
 │   ├── spanio.py                   ← resolves a pointer against the source object, hash-verified
 │   ├── workflows/
-│   │   ├── ingest_workflow.py      ← IngestWorkflow: stage → embed in batches → index
-│   │   └── backfill_workflow.py    ← BackfillWorkflow: re-embed → knowledge_v2 (deferred)
+│   │   └── ingest_workflow.py      ← IngestWorkflow: stage → embed in batches → index
 │   ├── activities/
-│   │   ├── ingest.py               ← stage + embed + index + clear activities
-│   │   └── backfill.py             ← re-embed activity (deferred, fails fast)
+│   │   └── ingest.py               ← stage + embed + index + clear activities
 │   ├── extractors/                 ← Markdown extractor; pdf / csv / text are deferred stubs
 │   ├── config_store.py             ← active collection/index pointer
 │   └── search_index.py             ← idempotent Atlas Vector Search management

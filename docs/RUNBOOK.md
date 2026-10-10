@@ -31,7 +31,7 @@ the same steps one at a time.
 - [5. S3 bucket](#5-s3-bucket)
 - [6. Run the full stack](#6-run-the-full-stack)
 - [7. Verify ingestion](#7-verify-ingestion)
-- [8. Backfill + model cutover](#8-backfill--model-cutover)
+- [8. Model change: re-ingest + cutover](#8-model-change-re-ingest--cutover)
 - [9. Production trigger (AWS Lambda)](#9-production-trigger-aws-lambda)
 - [10. Query plane (hosted deep agent)](#10-query-plane-hosted-deep-agent)
 - [Cloud infra references](#cloud-infra-references)
@@ -323,35 +323,32 @@ In Atlas, confirm:
 
 ---
 
-## 8. Backfill + model cutover
+## 8. Model change: re-ingest + cutover
 
-Use this when upgrading the embedding model (e.g. `voyage-3.5` to a newer model with different
-dimensions).
-
-**Current status: the re-embed step is deferred and does not run end to end.** This is a
-design decision, not an unfinished edge: zero-copy means `knowledge_zc` holds pointers and
-embeddings but no text, so there is nothing local to re-embed from. `reembed_and_write` raises a
-non-retryable `ApplicationError` (type `BackfillDeferred`) and `make backfill` fails on the
-first attempt rather than retrying a deferral six times.
-
-**Re-ingest instead.** An embedding-model change is handled by pointing `EMBED_MODEL` at the new
-model, recreating the index at the new dimension, and re-running ingestion from S3, which is the
-authoritative copy. That path works today and is what the deferral assumes you will do.
-
-The two commands below are kept as the intended shape of a blue/green swap, not a verified one:
+Use this when changing the embedding model (for example `voyage-3.5` to a model with different
+dimensions). There is no backfill: `knowledge_zc` stores pointers and embeddings but no text, so
+there is nothing to re-embed from. Re-ingest from S3, which holds the only copy, into a second
+collection, then switch retrieval to it.
 
 ```bash
-# Deferred: starts a BackfillWorkflow that fails fast on the first activity.
-make backfill MODEL=voyage-3-large
+# 1. Pin retrieval to the current collection so it stays live during the rebuild
+make cutover TO=knowledge_zc
 
-# The pointer flip itself is independent of backfill and does work, but only
-# against a target collection something else has already populated.
+# 2. In .env: KNOWLEDGE_COLLECTION=knowledge_v2, VOYAGE_MODEL=<new>, EMBED_DIM=<new dim>
+make restart-app
+make index
+
+# 3. Re-seed every object into the new collection
+make seed FILE=... KEY=...
+
+# 4. Once the knowledge_v2 index is READY, switch retrieval to it
 make cutover TO=knowledge_v2
+make query Q="test question"
 ```
 
-Retrieval reads the `temporal_config` collection to know which collection is active, so a
-cutover needs no restart. Do not run `make cutover` against an empty `knowledge_v2`: it will
-succeed and point every query at a collection with nothing in it.
+`cutover` reads the model and dimension from a document in the target and refuses an empty
+target. Retrieval and `read_span` read the `active` document in `temporal_config` on every query,
+so the hosted agent needs no restart. The old collection stays in place for rollback.
 
 ---
 

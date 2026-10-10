@@ -1,7 +1,9 @@
 """Cut over the active collection/index/model pointer (blue/green swap).
 
-Run after a BackfillWorkflow finishes and the green index is queryable:
-  uv run python -m pipeline.cutover --to knowledge_v2 --model voyage-3-large --dim 1024
+Run after re-ingesting into the target collection and once its index is queryable:
+  uv run python -m pipeline.cutover --to knowledge_v2
+
+Refuses an empty target, which would point every query at a collection with nothing in it.
 """
 
 from __future__ import annotations
@@ -23,11 +25,11 @@ def main() -> None:
 
     # Infer model/dim from a sample doc in the target if not supplied.
     model, dim = args.model, args.dim
-    if model is None or dim is None:
-        sample = knowledge_collection(args.to).find_one({}, {"model": 1, "dim": 1})
-        if sample:
-            model = model or sample.get("model")
-            dim = dim or sample.get("dim")
+    sample = knowledge_collection(args.to).find_one({}, {"model": 1, "dim": 1})
+    if sample is None:
+        raise SystemExit(f"cutover: {args.to} is empty; ingest into it before switching retrieval to it")
+    model = model or sample.get("model")
+    dim = dim or sample.get("dim")
     model = model or settings.voyage_model
     dim = dim or settings.embed_dim
 

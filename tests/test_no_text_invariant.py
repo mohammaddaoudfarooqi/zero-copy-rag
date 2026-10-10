@@ -40,12 +40,8 @@ def _string_keys(path: pathlib.Path) -> set[str]:
 
 
 def test_write_path_modules_never_mention_a_text_key():
-    # backfill.py is in this tuple even though reembed_and_write is currently a
-    # deferred stub: it is the one module that DID carry {"text": doc["text"]}, and
-    # un-deferring it is the most likely way text ever re-enters the write path.
     # spanio.py stays out; its model-facing read result legitimately returns text.
-    for rel in ("pipeline/activities/ingest.py", "pipeline/retrieval.py",
-                "pipeline/activities/backfill.py"):
+    for rel in ("pipeline/activities/ingest.py", "pipeline/retrieval.py"):
         assert "text" not in _string_keys(ROOT / rel), rel
 
 

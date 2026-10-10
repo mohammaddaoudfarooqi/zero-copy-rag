@@ -13,7 +13,7 @@ Last updated: 2026-09-23
 - [4. End-to-end data flow](#4-end-to-end-data-flow)
 - [5. Workflow design](#5-workflow-design)
   - [5.1 IngestWorkflow](#51-ingestworkflow)
-  - [5.2 BackfillWorkflow](#52-backfillworkflow)
+  - [5.2 Model change: re-ingest and cutover](#52-model-change-re-ingest-and-cutover)
 - [6. Activity design](#6-activity-design)
 - [7. Extractor system](#7-extractor-system)
 - [8. MongoDB data model](#8-mongodb-data-model)
@@ -78,16 +78,12 @@ pipeline/
 ├── retrieval.py                     <- $vectorSearch over the active collection; returns pointers, never text
 ├── spanio.py                         <- the only module that resolves a pointer back into text
 ├── cutover.py                         <- flip the active collection/index/model pointer
-├── trigger_backfill.py                 <- CLI: start BackfillWorkflow (re-embed active -> green)
 ├── seed.py / seed_repo.py               <- dev utilities: upload a file / a markdown docs repo
 ├── workflows/
-│   ├── ingest_workflow.py                <- IngestWorkflow: stage -> embed in batches -> index
-│   └── backfill_workflow.py               <- BackfillWorkflow: paginated re-embed, continue-as-new
+│   └── ingest_workflow.py                <- IngestWorkflow: stage -> embed in batches -> index
 ├── activities/
-│   ├── ingest.py                            <- fetch_and_stage_chunks, embed_staged_batch,
-│   │                                            index_document, clear_document
-│   └── backfill.py                           <- read_source_batch, reembed_and_write (deferred),
-│                                                 ensure_target_index
+│   └── ingest.py                            <- fetch_and_stage_chunks, embed_staged_batch,
+│                                                index_document, clear_document
 └── extractors/
     ├── base.py                                 <- Extractor ABC, char-to-byte-span conversion,
     │                                               window() splitter
@@ -279,46 +275,24 @@ citable; leaving its old chunks searchable would mean the agent could cite text 
 `WorkflowIDConflictPolicy.TERMINATE_EXISTING`; a re-upload while an ingest is still running
 terminates the in-flight run and starts fresh, so there is never a duplicate or a race.
 
-### 5.2 BackfillWorkflow
+### 5.2 Model change: re-ingest and cutover
 
-**File:** `pipeline/workflows/backfill_workflow.py`
+There is no backfill. Re-embedding needs chunk text and `knowledge_zc` stores none, so a model
+change re-ingests from S3, which holds the only copy, into a second collection and then flips the
+active pointer.
 
-**Trigger:** model upgrade requiring a dimension change (e.g. `voyage-3.5` 1024-dim to a new
-model).
-
-**Current status: deferred and non-functional end to end.**
-`pipeline/activities/backfill.py::reembed_and_write` raises a non-retryable `ApplicationError`
-(type `BackfillDeferred`), because the searchable collection no longer stores chunk text to
-re-embed from. Starting a `BackfillWorkflow` runs `ensure_target_index` and the first
-`read_source_batch` successfully, then fails on the first `reembed_and_write` call without
-retrying. An embedding-model change is handled by re-ingesting from S3 instead (see
-`docs/RUNBOOK.md` section 8). This section describes the mechanism as written, not a verified
-operation.
-
-**Design pattern:** `continue_as_new`, the workflow re-starts itself with a cursor (`after_id`)
-after each batch, keeping Temporal history bounded regardless of collection size.
-
-**Stages per batch:**
-
-| Activity                      | Description                                                                                       |
-| ------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `ensure_target_index`         | Create the vector index on the green collection at the new dimension (once, before the first batch) |
-| `read_source_batch`           | Paginated read of the source (active) collection, 50 chunks at a time, sorted by `_id`             |
-| `reembed_and_write` (per doc) | Deferred: raises non-retryable `ApplicationError` (`BackfillDeferred`) unconditionally today     |
-
-**Blue/green cutover:** `BackfillWorkflow` is designed to write only to a green collection (for
-example `knowledge_v2`). The active pointer in `temporal_config` stays on the blue collection
-until an operator runs `make cutover TO=knowledge_v2`. `cutover.py` and `config_store.py` work
-independently of whether backfill itself ran; the flip just repoints `active_collection` at
-whatever documents already exist in the target.
+`IngestWorkflow` writes to `KNOWLEDGE_COLLECTION` unless a `target_collection` is passed, and
+`temporal_config.active` names the collection, index, model and dimension that retrieval and
+`read_span` use. `make cutover TO=<collection>` rewrites that document, reading the model and
+dimension from a document in the target, and refuses an empty target. The old collection stays
+in place for rollback. Steps are in `docs/RUNBOOK.md` section 8.
 
 ```mermaid
 flowchart LR
-    BLUE[(knowledge_zc<br/>blue, active)] -->|read_source_batch<br/>50 per page, no embeddings| BF[BackfillWorkflow<br/>continue_as_new per page]
-    BF -->|"reembed_and_write<br/>(deferred: fails fast today)"| GREEN[(knowledge_v2<br/>green)]
-    OP[Operator] -->|make cutover TO=knowledge_v2| CFG[(temporal_config<br/>active_collection)]
-    CFG -.->|retrieval reads the active pointer| BLUE
-    CFG -.->|after cutover| GREEN
+    BLUE[(knowledge_zc<br/>current model, active)] -.->|retrieval during the rebuild| AGENT[agent]
+    S3[(S3)] -->|"re-ingest with the new VOYAGE_MODEL"| GREEN[(knowledge_v2<br/>new model)]
+    OP[Operator] -->|make cutover TO=knowledge_v2| CFG[(temporal_config<br/>active pointer)]
+    CFG -.->|read on every query| AGENT
 ```
 
 ---
@@ -483,11 +457,10 @@ itself signals the invariant: **z**ero-**c**opy.
 }
 ```
 
-### `knowledge_v2` collection (green, backfill target)
+### `knowledge_v2` collection (second collection for a model change)
 
-Same schema as `knowledge_zc`. Intended to be populated by `BackfillWorkflow`; as noted in
-section 5.2, that path is currently deferred and does not write real data yet. Becomes active
-after `make cutover`.
+Same schema as `knowledge_zc`. Filled by re-ingesting from S3 with the new model (section 5.2),
+and active after `make cutover TO=knowledge_v2`.
 
 ### `temporal_config` collection
 
@@ -527,9 +500,7 @@ Created idempotently by `ensure_vector_index` at the end of every `index_documen
 ```
 
 The `filter` fields let retrieval scope to a document or source URI without a full scan.
-`ensure_vector_index` lists existing indexes and skips creation if present. `BackfillWorkflow`
-calls `ensure_target_index` once before writing to the green collection; that index-creation call
-does not depend on `reembed_and_write` being implemented.
+`ensure_vector_index` lists existing indexes and skips creation if present.
 
 ---
 
@@ -703,7 +674,7 @@ All settings live in `.env` (loaded by `pipeline/config.py` via Pydantic Setting
 | `MONGODB_DB`              | `temporal`               | Database name                                     |
 | `CHUNKS_COLLECTION`       | `chunks_staging`         | Transient staging between workflow stages         |
 | `KNOWLEDGE_COLLECTION`    | `knowledge_zc`           | Active (blue) searchable pointer + vector store    |
-| `KNOWLEDGE_V2_COLLECTION` | `knowledge_v2`           | Green backfill target                             |
+| `KNOWLEDGE_V2_COLLECTION` | `knowledge_v2`           | Second collection for a model change              |
 | `CONFIG_COLLECTION`       | `temporal_config`         | Active pointer document                           |
 | `MEMORY_COLLECTION`       | `agent_memory`            | Reserved for agent memory (not yet written)       |
 | `VOYAGE_API_KEY`          | (none)                   | Voyage AI key (embeddings)                        |
@@ -869,9 +840,8 @@ class FullSyncWorkflow:
 
 ### Model A/B testing
 
-The intended pattern is to run `BackfillWorkflow` into a third collection with a different model
-and point a shadow agent at it to compare retrieval quality before cutting over. This depends on
-`reembed_and_write` being implemented; today it is a deferred stub (section 5.2).
+Re-ingest into a third collection with a different `VOYAGE_MODEL` (section 5.2) and point a
+shadow agent's active pointer at it to compare retrieval quality before cutting over.
 
 ### Observability hooks
 

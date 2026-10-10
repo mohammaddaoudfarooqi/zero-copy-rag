@@ -49,9 +49,10 @@ anything. See section 11 for how that function is exposed to a query-side agent.
 
 Ingestion is triggered **directly** from an object-created event, no Kafka or message broker.
 The moment the object lands, an AWS Lambda subscribed to the bucket starts an `IngestWorkflow`
-(locally, `make seed` starts it right after the upload); once started, Temporal guarantees it runs to completion through failures. This
-removes a Kafka to Sink Connector to `sources` to Atlas Stream Processing chain and its
-operational overhead (see ADR `docs/decisions/0001-trigger-ingestion-directly-from-s3.md`).
+(locally, `make seed` starts it right after the upload); once started, Temporal guarantees it
+runs to completion through failures. The decisions behind this split are recorded in
+`docs/decisions/` (ADR 0001, pointers instead of text; ADR 0002, ingestion on Temporal and the
+agent on Agent Engine).
 
 The design is **source-agnostic** at two seams: the `S3Ref` data contract plus the
 `handle_s3_event` trigger core (adding a source means calling `start_ingest` from a new adapter),

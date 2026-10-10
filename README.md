@@ -295,7 +295,7 @@ mdb-temporal-pra/
 | **[docs/RUNBOOK.md](docs/RUNBOOK.md)**                 | Prerequisites, API key setup, local spin-up, cloud infra references                               |
 | **[docs/LLD.md](docs/LLD.md)**                         | Low-level design: data contracts, workflow internals, scaling to multiple sources and data types  |
 | **[mongodb_agent_engine/README.md](mongodb_agent_engine/README.md)** | The hosted deep agent: SDK surface, what the capability split enforces, deployment on Atlas Agent Engine |
-| **[docs/decisions/](docs/decisions/)**                 | Architecture Decision Records, e.g. ADR 0001 (direct-from-S3 triggering)                          |
+| **[docs/decisions/](docs/decisions/)**                 | Architecture Decision Records: pointers instead of text (0001), ingestion and query planes (0002) |
 
 ---
 

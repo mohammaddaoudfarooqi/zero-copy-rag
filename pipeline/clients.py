@@ -46,7 +46,7 @@ def _resolve(setting_value: str, env_name: str) -> str:
 def _mongo_client_for(uri: str) -> "MongoClient":
     from pymongo import MongoClient
 
-    return MongoClient(uri, appname="temporal-app")
+    return MongoClient(uri, appname="zero-copy-rag")
 
 
 def mongo_client() -> "MongoClient":

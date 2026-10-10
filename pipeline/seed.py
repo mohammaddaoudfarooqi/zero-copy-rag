@@ -18,17 +18,16 @@ from .config import settings
 from .models import S3Ref
 from .trigger import start_ingests
 
-_SAMPLE = """# Temporal x MongoDB PRA: sample document
+_SAMPLE = """# zero-copy-rag: sample document
 
-This file was uploaded to S3 to trigger the Part 1 pipeline end to end:
+This file was uploaded to S3 to run the ingestion pipeline end to end:
 
-    S3 upload -> IngestWorkflow on Temporal -> chunk -> Voyage embeddings
-              -> MongoDB Atlas vector search.
+    S3 upload -> IngestWorkflow on Temporal -> byte-span chunks -> Voyage embeddings
+              -> pointers in MongoDB Atlas Vector Search.
 
-Temporal owns orchestration, retries, checkpointing and resumability. MongoDB Atlas is
-the single source of truth for the knowledge base, the vector index, and agent memory.
-Voyage AI produces the embeddings. A crash mid-embedding resumes without re-embedding
-the chunks already completed.
+Temporal owns orchestration, retries, checkpointing and resumability. Atlas stores the
+embeddings and the pointers back into this object, never its text. A crash mid-embedding
+resumes without re-embedding the chunks already completed.
 """
 
 

@@ -1,4 +1,4 @@
-# Temporal x MongoDB PRA: local dev orchestration.
+# zero-copy-rag: local dev orchestration.
 # Run `make` (or `make help`) to list targets.
 
 SHELL := /bin/bash
@@ -21,7 +21,7 @@ Q ?= how does role-based access control protect constitutional principles?
 
 .PHONY: help
 help: ## Show this help
-	@echo "Temporal x MongoDB PRA: local dev"
+	@echo "zero-copy-rag: local dev"
 	@echo
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'

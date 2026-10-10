@@ -1,4 +1,4 @@
-"""Environment-driven configuration for the Part 1 pipeline.
+"""Environment-driven configuration for the ingestion pipeline and the agent's tools.
 
 All settings come from environment variables (loaded from a local ``.env`` in dev).
 Nothing here reaches out to a network; construct ``settings`` once and pass the

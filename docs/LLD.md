@@ -1,7 +1,7 @@
 # Low-Level Design
 
-**MongoDB x Temporal Partner Reference Architecture**
-Last updated: 2026-09-23
+**zero-copy-rag**
+Last updated: 2026-10-11
 
 ---
 

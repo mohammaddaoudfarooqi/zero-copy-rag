@@ -1,7 +1,7 @@
 [project]
-name = "temporal-app"
+name = "zero-copy-rag"
 version = "0.1.0"
-description = "MongoDB x Temporal Partner Reference Architecture, Part 1: fresh vector store (S3 -> Temporal -> Voyage -> Atlas)"
+description = "Zero-copy RAG: Temporal ingests S3 documents into MongoDB Atlas as pointers, and a deep agent on Atlas Agent Engine answers from them"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

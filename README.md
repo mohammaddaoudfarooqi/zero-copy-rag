@@ -1,9 +1,9 @@
-# MongoDB × Temporal: Partner Reference Architecture
+# zero-copy-rag
 
-A reference implementation of a durable, change-driven RAG pipeline. **Temporal** runs ingestion
-into **MongoDB Atlas**, and a deep agent hosted on Atlas Agent Engine answers questions from it.
-The index holds pointers and embeddings only; document text stays in the object store and is read
-back, hash-verified, when the agent cites it.
+Zero-copy RAG on MongoDB Atlas. **Temporal** ingests documents from S3 into Atlas Vector Search,
+and a deep agent on **Atlas Agent Engine** answers questions from them. The index holds
+embeddings and byte-range pointers only. Document text stays in S3 and is read back, checked
+against a SHA-256 taken at index time, whenever the agent cites it.
 
 > **Developers:** see [docs/RUNBOOK.md](docs/RUNBOOK.md) for prerequisites, API key setup,
 > local spin-up, and cloud infra references.
@@ -27,26 +27,25 @@ In this architecture Temporal owns ingestion:
 
 ## The problem this solves
 
-Customers hand-roll resilient ingestion/embedding pipelines and it hurts:
+Most RAG pipelines copy each chunk's text into the vector store next to its embedding. That
+second copy of every document sits outside the access controls of the bucket that already holds
+it, and it goes stale without anyone noticing when the source changes or is deleted.
 
-| Customer   | Pain hand-rolled without Temporal                                        |
-| ---------- | ------------------------------------------------------------------------ |
-| Customer A | MD5 change-tracking in production to decide what to re-embed             |
-| Customer B | A homegrown "lambda clock" cron to generate embeddings                   |
-| Customer C | A FastAPI pipeline, hand-tuning sequential vs. parallel                  |
-| Customer D | A 5-hour import that fails on the last step **reruns the entire import** |
-
-This PRA packages the pattern that removes that pain. It is already in production at multiple enterprise customers.
+This project keeps one copy. Atlas records where each chunk's bytes are, not the bytes. A changed
+object reads back as `stale` and a deleted one as `missing`, so the agent never quotes an old
+copy. Ingestion stays durable: a crash mid-embedding resumes at the first unfinished batch and
+never re-embeds finished chunks.
 
 ---
 
-## Partner Solutions Architecture
+## Architecture
 
 ### High-level design
 
-Temporal is used to bring durability to the content ingestion pipeline; a separately deployed deep agent queries what it produces.
+Temporal brings durability to the ingestion pipeline; a separately deployed deep agent queries
+what it produces.
 
-**How to read it:**
+**How to read the diagram below:**
 
 1. Changes in **data sources** (S3, RDBMS, messaging technologies, etc.) directly
    launch workflows running in Temporal.
@@ -67,10 +66,9 @@ flowchart LR
     USR[User] -->|question| AGT
 ```
 
-> **Design note:** the direct trigger (S3 to the ingest workflow) relies on Temporal's durable
-> execution for the "don't lose the event once the workflow starts" guarantee. If you already
-> have change data capture wired through Kafka, see the
-> [`with-kafka`](https://github.com/mongodb-partners/mdb-temporal-pra/tree/with-kafka) branch.
+> **Design note:** the direct trigger (S3 to the ingest workflow, no message broker) relies on
+> Temporal's durable execution for the "don't lose the event once the workflow starts" guarantee.
+> See [ADR 0002](docs/decisions/0002-split-ingestion-and-query-planes.md).
 
 ### Division of responsibility
 
@@ -198,8 +196,8 @@ deployment details.
 
 ```bash
 # 1. Clone and enter the repo
-git clone https://github.com/mongodb-partners/mdb-temporal-pra.git
-cd mdb-temporal-pra
+git clone https://github.com/mohammaddaoudfarooqi/zero-copy-rag.git
+cd zero-copy-rag
 
 # 2. Copy and fill in credentials
 cp .env.example .env
@@ -242,7 +240,7 @@ targets.
 ## Repo layout
 
 ```text
-mdb-temporal-pra/
+zero-copy-rag/
 ├── README.md
 ├── Makefile                        ← all dev commands (make help)
 ├── pyproject.toml                  ← Python deps managed by uv

@@ -270,7 +270,7 @@ mdb-temporal-pra/
 │   │   └── ingest_workflow.py      ← IngestWorkflow: stage → embed in batches → index
 │   ├── activities/
 │   │   └── ingest.py               ← stage + embed + index + clear activities
-│   ├── extractors/                 ← Markdown extractor; pdf / csv / text are deferred stubs
+│   ├── extractors/                 ← Markdown extractor (byte spans); other formats are refused
 │   ├── config_store.py             ← active collection/index pointer
 │   └── search_index.py             ← idempotent Atlas Vector Search management
 ├── infra/

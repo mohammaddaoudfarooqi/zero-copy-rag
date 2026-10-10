@@ -88,9 +88,7 @@ pipeline/
     ├── base.py                                 <- Extractor ABC, char-to-byte-span conversion,
     │                                               window() splitter
     ├── factory.py                                <- get_extractor(): markdown only today
-    ├── markdown.py                                <- the only supported extractor
-    └── pdf.py / csv_ext.py / text.py               <- deferred stubs, each raises UnsupportedSource
-                                                        unconditionally
+    └── markdown.py                                <- the only supported extractor
 
 mongodb_agent_engine/
 ├── app.py                <- Agent Engine entrypoint: registers search_knowledge + read_span as tools,
@@ -389,15 +387,11 @@ past whitespace at both edges. Default `chunk_size=1200`, `chunk_overlap=150` (c
 | Extension / MIME                     | Extractor          | Status                                                                    |
 | -------------------------------------- | -------------------- | ---------------------------------------------------------------------------- |
 | `.md`, `.markdown` / `text/markdown`, `text/x-markdown` | `MarkdownExtractor` | Supported. Splits on `#`/`##`/.../`######` headings, then character-windows each section; the heading itself is carried as a byte span (`heading_span`), never as text. |
-| `.pdf`                                | `PdfExtractor`      | Deferred. `ranges()` unconditionally raises `UnsupportedSource`; PDF text extraction does not produce a reproducible byte range in the source object. |
-| `.csv` / `text/csv`, `application/csv` | `CsvExtractor`      | Deferred. Same reason: rendered `header: value` records never appear verbatim in the file. |
-| anything else                         | `TextExtractor`     | Deferred. `ranges()` unconditionally raises `UnsupportedSource`.          |
+| anything else                         | none                | `UnsupportedSource`; the workflow clears the document. PDF and CSV are refused on purpose: extracted PDF text and rendered CSV records never appear verbatim in the file, so no byte range can reproduce them. |
 
 Resolution order: **file extension, then MIME type, then `UnsupportedSource`** if neither
-matches a registered markdown key. `factory.py` currently registers only the markdown extractor;
-`pdf.py`, `csv_ext.py`, and `text.py` exist as deferred stubs but are not wired into
-`_BY_EXT`/`_BY_MIME`, so any non-markdown key falls straight to the "unsupported source type"
-error regardless.
+matches a registered markdown key. `factory.py` registers only the markdown extractor, so any
+non-markdown key falls straight to the "unsupported source type" error.
 
 ---
 
@@ -762,8 +756,8 @@ uv run python -m pipeline.worker &   # worker N
 
 The extractor factory (`pipeline/extractors/factory.py`) is the intended extension point for new
 file or data types. Workflows and activities are type-agnostic: they receive `bytes` and call
-`get_extractor(key, content_type).chunk(body)`. Markdown is the only format actually wired in
-today; everything else is a deferred stub (section 7).
+`get_extractor(key, content_type).chunk(body)`. Markdown is the only format wired in today;
+everything else is refused (section 7).
 
 ### Adding a new extractor
 
@@ -780,9 +774,6 @@ today; everything else is a deferred stub (section 7).
 | Extractor           | Status    | `ranges()` behavior                                          |
 | --------------------- | ----------- | ---------------------------------------------------------------- |
 | `MarkdownExtractor` | Supported | Splits on `#`/`##`/`###` headings; window-splits long sections |
-| `PdfExtractor`      | Deferred  | Unconditionally raises `UnsupportedSource`                     |
-| `CsvExtractor`      | Deferred  | Unconditionally raises `UnsupportedSource`                     |
-| `TextExtractor`     | Deferred  | Unconditionally raises `UnsupportedSource`                     |
 
 ### Chunking parameter tuning (once/if a format is un-deferred)
 

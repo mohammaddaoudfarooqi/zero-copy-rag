@@ -471,10 +471,6 @@ Single document: the active collection/index/model pointer. Read by `retrieval.p
 }
 ```
 
-### `agent_memory` collection
-
-Reserved for agent memory. **Not currently written** by any code path in this repository.
-
 ---
 
 ## 9. Atlas Vector Search index
@@ -670,7 +666,6 @@ All settings live in `.env` (loaded by `pipeline/config.py` via Pydantic Setting
 | `KNOWLEDGE_COLLECTION`    | `knowledge_zc`           | Active (blue) searchable pointer + vector store    |
 | `KNOWLEDGE_V2_COLLECTION` | `knowledge_v2`           | Second collection for a model change              |
 | `CONFIG_COLLECTION`       | `temporal_config`         | Active pointer document                           |
-| `MEMORY_COLLECTION`       | `agent_memory`            | Reserved for agent memory (not yet written)       |
 | `VOYAGE_API_KEY`          | (none)                   | Voyage AI key (embeddings)                        |
 | `VOYAGE_MODEL`            | `voyage-3.5`              | Embedding model (1024-dim)                        |
 | `VOYAGE_BASE_URL`         | `https://ai.mongodb.com/v1` | Voyage endpoint, passed explicitly (see `pipeline/clients.py`) |

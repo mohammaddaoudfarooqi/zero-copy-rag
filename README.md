@@ -44,8 +44,6 @@ This PRA packages the pattern that removes that pain. It is already in productio
 
 ### High-level design
 
-![High-level architecture: data sources, Temporal, Voyage AI, Atlas, hosted deep agent](docs/images/mongodb-temporal-hld-directtotemporal.svg)
-
 Temporal is used to bring durability to the content ingestion pipeline; a separately deployed deep agent queries what it produces.
 
 **How to read it:**
@@ -79,7 +77,7 @@ flowchart LR
 | Concern                                                       | Owner                     |
 | ------------------------------------------------------------- | ------------------------- |
 | Orchestration, retries, checkpointing, resumability           | **Temporal**              |
-| Vector index, pointers, agent memory & state                  | **MongoDB Atlas**         |
+| Vector index, pointers, active-collection pointer             | **MongoDB Atlas**         |
 | Embeddings                                                    | **MongoDB Voyage AI**     |
 | Agent reasoning & answers                                     | **Atlas Agent Engine**    |
 
@@ -92,12 +90,11 @@ Database: temporal
 ├── chunks_staging       ← intermediate chunks (spans, not text) during IngestWorkflow
 ├── knowledge_zc         ← embeddings + source pointers, Atlas Vector Search index (active), no text
 ├── knowledge_v2         ← second collection for a model change (re-ingest, then cutover)
-├── temporal_config      ← active collection/index pointer (flipped by cutover)
-└── agent_memory         ← reserved for agent memory (not yet written)
+└── temporal_config      ← active collection/index pointer (flipped by cutover)
 ```
 
-Retrieval and (future) agent memory live in the **same database**: no second copy, and no sync
-lag between what the pipeline writes and what the agent reads. Document text never lands here; it
+Retrieval reads the same database the pipeline writes, so there is no second copy and no sync
+lag between them. Document text never lands here; it
 is resolved from the source object at query time. See [docs/LLD.md](docs/LLD.md) sections 3 and 8
 for the pointer contract and the collection schemas.
 

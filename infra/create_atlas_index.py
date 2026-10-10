@@ -41,7 +41,6 @@ def ensure_collections_and_indexes() -> dict[str, list[str]]:
         settings.chunks_collection,
         settings.knowledge_collection,
         settings.knowledge_v2_collection,
-        settings.memory_collection,
         settings.config_collection,
     ]
 
@@ -65,9 +64,6 @@ def ensure_collections_and_indexes() -> dict[str, list[str]]:
             IndexModel([("chunk_id", 1)], name="chunk_id_unique", unique=True),
             IndexModel([("doc_id", 1), ("doc_content_hash", 1)], name="doc_hash_lookup"),
             IndexModel([("doc_id", 1), ("ordinal", 1)], name="doc_ordinal"),
-        ],
-        settings.memory_collection: [
-            IndexModel([("ts", -1)], name="ts_desc"),
         ],
     }
 

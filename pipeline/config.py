@@ -55,7 +55,6 @@ class Settings(BaseSettings):
     knowledge_collection: str = "knowledge_zc"    # searchable pointers + vectors (no text)
     knowledge_v2_collection: str = "knowledge_v2" # second collection for a model change (re-ingest)
     config_collection: str = "temporal_config"         # cutover active-pointer doc
-    memory_collection: str = "agent_memory"       # deep-agent write-back
     vector_search_index_name: str = "temporalai_search_index"
 
     # ---- Voyage AI ----

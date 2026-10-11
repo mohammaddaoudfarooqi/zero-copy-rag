@@ -5,7 +5,7 @@ How to run zero-copy-rag on your machine, and what changes for a production depl
 Everything runs on your machine except storage. The Temporal dev server, the worker and the
 Agent Engine Playground are local processes; the documents live in a real S3 bucket and the
 index lives in Atlas. The bucket has to be real because the agent's
-`read_span` tool reads it from behind an egress proxy that only admits the hosts named in
+`read_spans` tool reads it from behind an egress proxy that only admits the hosts named in
 `agent.yaml` (section 5).
 
 The short version, once sections 1 to 5 are done:
@@ -186,7 +186,7 @@ The suite needs no network, Atlas or AWS access.
 ## 5. S3 bucket
 
 The documents stay in S3. `knowledge_zc` holds a pointer into each object plus its embedding,
-and the agent's `read_span` tool fetches the bytes at query time, so the worker that indexes
+and the agent's `read_spans` tool fetches the bytes at query time, so the worker that indexes
 the bucket and the Tool Pod that reads it must see the same bucket.
 
 The Tool Pod's egress is deny-all. Locally and hosted alike, its proxy admits only the hosts
@@ -387,7 +387,8 @@ workspace.
 side uses:
 
 - `search_knowledge` wraps `pipeline.retrieval.vector_search` and returns pointers only.
-- `read_span` wraps `pipeline.spanio.read_span` and takes only a `chunk_id`.
+- `read_spans` calls `pipeline.spanio.read_span` for up to six `chunk_id`s, concurrently, and
+  takes nothing but chunk_ids.
 
 These are split across two sub-agents, `knowledge-retriever` (search only) and `source-reader`
 (read only). `mongodb_agent_engine/README.md` is the authoritative status of this deployment shim and
@@ -441,7 +442,7 @@ repository root:
 
 ### Where the boundary actually is
 
-Two limits hold. `read_span` takes only a `chunk_id`, so no caller can name a bucket, key or
+Two limits hold. `read_spans` takes only chunk_ids, so no caller can name a bucket, key or
 byte range (`tests/test_agent_wiring.py`). Egress is deny-all plus four named hosts, and the
 proxy answers `CONNECT` to anything else with 403 (`tests/test_egress.py`). The sub-agent split
 does not hold in the same way: both sub-agents share one tool sandbox and its credentials, and

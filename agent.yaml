@@ -49,7 +49,7 @@ sandboxes:
       - AWS_SECRET_ACCESS_KEY
     tools:
       - search_knowledge
-      - read_span
+      - read_spans
 
 # Egress is deny-all by default; every destination has to be named.
 network:

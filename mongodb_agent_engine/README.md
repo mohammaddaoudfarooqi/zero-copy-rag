@@ -96,8 +96,8 @@ the next section.
 
 This is the design's central claim, and it is easy to overstate.
 
-**Enforced in this repo.** `read_span` accepts a `chunk_id` and nothing else, and forwards it
-positionally. No caller, model or otherwise, can supply a bucket, key, ETag, byte range or content
+**Enforced in this repo.** `read_spans` accepts chunk_ids and nothing else, forwards each one
+positionally to `pipeline.spanio.read_span`, and reads at most six per call. No caller, model or otherwise, can supply a bucket, key, ETag, byte range or content
 hash. `search_knowledge` wraps `pipeline.retrieval.vector_search`, whose projection has no `text`
 field, so the retrieval path cannot return document text at all. `tests/test_agent_wiring.py` pins
 both.

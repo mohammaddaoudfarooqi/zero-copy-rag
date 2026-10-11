@@ -61,7 +61,7 @@ flowchart LR
     TMP -->|embed| VOY[Voyage AI]
     TMP -->|pointers + embeddings, no text| ATL[(MongoDB Atlas<br/>knowledge_zc + Vector Search)]
     AGT[Hosted deep agent<br/>Atlas Agent Engine] -->|search: pointers| ATL
-    AGT -->|read_span: verified bytes| SRC
+    AGT -->|read_spans: verified bytes| SRC
     USR[User] -->|question| AGT
 ```
 
@@ -165,8 +165,9 @@ Engine** (`mongodb_agent_engine/`), with two sub-agents split by capability:
 
 - **`knowledge-retriever`** searches the vector index and returns pointers (chunk id, source URI,
   span, score), never text.
-- **`source-reader`** is the only sub-agent given the tool that resolves a pointer against the
-  source object and returns the text behind it, hash-verified at read time.
+- **`source-reader`** is the only sub-agent given the tool that resolves pointers against the
+  source object and returns the text behind them, hash-verified at read time. It reads at most
+  six chunks per call, concurrently.
 
 ```mermaid
 flowchart LR
@@ -174,7 +175,7 @@ flowchart LR
     P --> R[knowledge-retriever]
     P --> D[source-reader]
     R -->|search_knowledge| ATL[(Atlas knowledge_zc)]
-    D -->|"read_span(chunk_id)"| S3[(S3 object)]
+    D -->|"read_spans(chunk_ids)"| S3[(S3 object)]
     ATL -.->|pointers| R
     S3 -.->|bytes, sha256 verified| D
 ```

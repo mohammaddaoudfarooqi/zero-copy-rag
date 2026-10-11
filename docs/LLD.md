@@ -91,7 +91,7 @@ pipeline/
     └── markdown.py                                <- the only supported extractor
 
 mongodb_agent_engine/
-├── app.py                <- Agent Engine entrypoint: registers search_knowledge + read_span as tools,
+├── app.py                <- Agent Engine entrypoint: registers search_knowledge + read_spans as tools,
 │                             wires two sub-agents (knowledge-retriever, source-reader)
 ├── llm.py                <- model selection from LLM_PROVIDER / LLM_MODEL, optional gateway via LLM_BASE_URL
 └── README.md              <- SDK surface, capability boundary, deployment notes
@@ -187,7 +187,7 @@ flowchart TD
     CLR -.->|delete| KZC
 
     KZC -->|"$vectorSearch: pointers only<br/>chunk_id, ordinal, source_uri, span, metadata, score"| AGENT[Hosted deep agent<br/>mongodb_agent_engine/]
-    AGENT -->|"read_span(chunk_id)"| RS["pipeline.spanio.read_span<br/>ranged GET conditioned on etag,<br/>strict UTF-8, sha256 verify"]
+    AGENT -->|"read_spans(chunk_ids)"| RS["pipeline.spanio.read_span<br/>ranged GET conditioned on etag,<br/>strict UTF-8, sha256 verify"]
     RS -->|ranged GET| OBJ[(Source object<br/>same bucket)]
 ```
 
@@ -562,7 +562,7 @@ flowchart LR
 
     subgraph POD[Tool Pod: MONGODB_URI, MONGODB_DB, VOYAGE_API_KEY,<br/>LLM_API_KEY, AWS keys]
         SK["search_knowledge(query, k)"]
-        RS["read_span(chunk_id)"]
+        RS["read_spans(chunk_ids)"]
     end
 
     RET -->|calls| SK
@@ -591,15 +591,17 @@ the cluster's IP access list rather than through the HTTPS egress allow-list abo
 
 - `search_knowledge(query, k=8)` wraps `pipeline.retrieval.vector_search`. It can never return
   document text: the underlying `$vectorSearch` projection has no `text` key by construction.
-- `read_span(chunk_id)` wraps `pipeline.spanio.read_span`, called positionally with only the
-  `chunk_id`. Its result carries text only when `status == "ok"`; `unknown`, `missing`, and
-  `stale` all carry none.
+- `read_spans(chunk_ids)` calls `pipeline.spanio.read_span` once per distinct `chunk_id`,
+  positionally and concurrently, for at most `READ_LIMIT` (6) of them; the rest come back with
+  status `skipped`. Each result carries text only when `status == "ok"`; `unknown`, `missing`,
+  `stale` and `skipped` carry none. The cap is in code because the prompt alone did not hold:
+  one run read 34 chunks for one question, each a separate round trip of 7 to 9 seconds.
 
 These are split across two sub-agents: `knowledge-retriever` (tools=[`search_knowledge`]) and
-`source-reader` (tools=[`read_span`]). The parent agent is built with `tools=[]`, so it has to
-delegate. Its instructions tell it to delegate search to `knowledge-retriever`, pick two to four
-promising `chunk_id`s, delegate those to `source-reader`, and quote only text that came back with
-`status == "ok"`.
+`source-reader` (tools=[`read_spans`]). The parent agent is built with `tools=[]`, so it has to
+delegate. Its instructions tell it to delegate once to each: one search, then at most six
+`chunk_id`s to `source-reader` in a single task, with a second read only if every read in the
+first came back unavailable. It quotes only text that came back with `status == "ok"`.
 
 The model is chosen in `mongodb_agent_engine/llm.py` from `LLM_PROVIDER` (default
 `anthropic`, model `claude-sonnet-5`) with an optional `LLM_MODEL` override, and optionally
@@ -610,7 +612,7 @@ routes every model call through the Orchestration Engine to the Tool Pod, which 
 
 ### What is and is not enforced
 
-`read_span`'s signature is a real, Python-level guarantee: no caller, model or otherwise, can
+`read_spans`'s signature is a real, Python-level guarantee: no caller, model or otherwise, can
 pass a bucket, key, byte range, or content hash through this tool. `tests/test_agent_wiring.py`
 pins that signature and the `is_local=False` placement.
 

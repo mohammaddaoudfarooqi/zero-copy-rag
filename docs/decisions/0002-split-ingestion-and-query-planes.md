@@ -17,7 +17,7 @@ place for people to ask questions.
   through the AWS Lambda in production or `make seed` locally, with no broker in between. Each
   embed batch is an activity, so a crashed worker resumes at the first unfinished batch.
 - **The query agent runs on Atlas Agent Engine.** A deep agent with two sub-agents: one searches
-  and gets pointers, the other is the only one given `read_span`. Both tools run in the tool
+  and gets pointers, the other is the only one given `read_spans`. Both tools run in the tool
   sandbox, which alone holds the credentials, with egress limited to named hosts.
 - The two planes never call each other. They share the `knowledge_zc` collection and the bucket,
   and the ETag and hash in each pointer keep them consistent.

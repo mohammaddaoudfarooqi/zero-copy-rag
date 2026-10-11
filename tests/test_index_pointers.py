@@ -328,8 +328,8 @@ def _fake_workflow(calls, staged, cleared=None):
 @pytest.mark.parametrize("status,reason", [("empty", "document yielded no chunks"),
                                            ("unsupported", "pdf is deferred")])
 async def test_workflow_clears_instead_of_returning_early(monkeypatch, status, reason):
-    from pipeline.workflows import ingest_workflow as wf
     from pipeline.models import S3Ref
+    from pipeline.workflows import ingest_workflow as wf
 
     calls = []
     staged = {"doc_id": "d", "doc_hash": "dh", "n": 0, "status": status, "reason": reason}
@@ -352,8 +352,8 @@ async def test_workflow_unchanged_does_not_clear(monkeypatch):
     {"doc_id": ..., "status": ..., "indexed": 0} unless it's the clear branch
     (which also stamps `removed`/`reason`).
     """
-    from pipeline.workflows import ingest_workflow as wf
     from pipeline.models import S3Ref
+    from pipeline.workflows import ingest_workflow as wf
 
     calls = []
     staged = {"doc_id": "d", "doc_hash": "dh", "n": 0, "status": "unchanged"}

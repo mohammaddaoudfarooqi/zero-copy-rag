@@ -145,7 +145,7 @@ def embed_staged_batch(doc_id: str, ordinals: list[int], model: str | None = Non
                 {"$set": {"embedding": list(v), "model": use_model,
                           "dim": len(v), "status": "embedded"}},
             )
-            for d, v in zip(todo, vectors)
+            for d, v in zip(todo, vectors, strict=True)
         ],
         ordered=False,
     )

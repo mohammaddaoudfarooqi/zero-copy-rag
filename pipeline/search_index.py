@@ -19,13 +19,14 @@ def vector_index_definition(dim: int) -> dict[str, Any]:
 
 def ensure_vector_index(coll, name: str | None = None, dim: int = 1024) -> bool:
     """Create the vector search index if absent. Returns True if a creation was issued."""
+    from pymongo.errors import PyMongoError
     from pymongo.operations import SearchIndexModel
 
     name = name or settings.vector_search_index_name
 
     try:
         existing = {ix["name"] for ix in coll.list_search_indexes()}
-    except Exception:
+    except PyMongoError:
         existing = set()
     if name in existing:
         return False

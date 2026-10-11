@@ -15,7 +15,6 @@ from .activities import ALL_ACTIVITIES
 from .config import settings
 from .workflows import ALL_WORKFLOWS
 
-
 # Sync activities (pymongo, voyage, boto3) run in a thread pool of this size.
 ACTIVITY_THREADS = 16
 

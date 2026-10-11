@@ -22,7 +22,7 @@ class S3Ref:
     content_type: str = ""
 
     @staticmethod
-    def make(bucket: str, key: str, etag: str = "", size: int = 0, content_type: str = "") -> "S3Ref":
+    def make(bucket: str, key: str, etag: str = "", size: int = 0, content_type: str = "") -> S3Ref:
         return S3Ref(
             bucket=bucket,
             key=key,

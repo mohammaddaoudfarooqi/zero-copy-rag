@@ -355,7 +355,7 @@ so the hosted agent needs no restart. The old collection stays in place for roll
 ## 9. Production trigger (AWS Lambda)
 
 In production the trigger is an **AWS Lambda** subscribed to the S3 bucket's **ObjectCreated**
-event notifications. The Lambda calls `pipeline.lambda_handler`, which runs the **same**
+and **ObjectRemoved** event notifications. The Lambda calls `pipeline.lambda_handler`, which runs the **same**
 `handle_s3_event` code in `pipeline/trigger.py`: parse the event, start one
 `IngestWorkflow` per object. No Kafka, `sources` collection, or Stream Processing is involved.
 With the notification in place, seed with `NO_TRIGGER=1` so the upload is the only trigger.
@@ -369,7 +369,9 @@ With the notification in place, seed with `NO_TRIGGER=1` so the upload is the on
   TLS, which suits a self-hosted Temporal service inside your network. Temporal Cloud needs mTLS
   or an API key, and this repo does not configure either yet: add it to `get_client()` in
   `pipeline/trigger.py` and to the worker before pointing them at Temporal Cloud.
-- Wire the bucket's `s3:ObjectCreated:*` notifications to the Lambda (S3 console or IaC).
+- Wire the bucket's `s3:ObjectCreated:*` and `s3:ObjectRemoved:*` notifications to the Lambda
+  (S3 console or IaC). Without the removal events, a deleted object's chunks stay searchable and
+  read back as `missing`. Add `s3:LifecycleExpiration:*` too if the bucket has expiry rules.
 
 ---
 
@@ -464,8 +466,8 @@ When moving from local dev to real cloud infrastructure, use these references:
 
 ### AWS S3 (production)
 
-The same bucket settings as section 3. Wiring `s3:ObjectCreated:*` to the Lambda in section 9
-is what makes ingestion automatic. Until that exists, `make seed` starts each ingest itself
+The same bucket settings as section 3. Wiring `s3:ObjectCreated:*` and `s3:ObjectRemoved:*` to
+the Lambda in section 9 is what makes ingestion automatic. Until that exists, `make seed` starts each ingest itself
 (section 6).
 
 | Topic                                   | Documentation                                                                                                               |

@@ -184,6 +184,40 @@ def test_unsupported_type_stages_nothing_and_reports_why(wired, monkeypatch):
     assert staging.docs == []
 
 
+class _MissingS3(_FakeS3):
+    def __init__(self, code):
+        super().__init__()
+        self.code = code
+
+    def get_object(self, **kw):
+        from botocore.exceptions import ClientError
+
+        self.calls.append(kw)
+        raise ClientError({"Error": {"Code": self.code, "Message": "x"}}, "GetObject")
+
+
+@pytest.mark.parametrize("code", ["NoSuchKey", "404"])
+def test_a_deleted_object_stages_nothing_and_reports_missing(wired, monkeypatch, code):
+    """A delete event, or an upload event that arrives after the object was deleted, must
+    end in clear_document rather than in five retries of a GET that cannot succeed."""
+    staging, *_ = wired
+    monkeypatch.setattr(ing, "s3_client", lambda: _MissingS3(code))
+    out = ing.fetch_and_stage_chunks(REF)
+    assert (out["n"], out["status"]) == (0, "missing")
+    assert out["doc_id"] == doc_id_for_uri(REF.s3_uri)
+    assert "reason" in out
+    assert staging.docs == []
+
+
+def test_other_s3_errors_still_raise(wired, monkeypatch):
+    """AccessDenied is a configuration problem, not a deletion: clearing would be wrong."""
+    from botocore.exceptions import ClientError
+
+    monkeypatch.setattr(ing, "s3_client", lambda: _MissingS3("AccessDenied"))
+    with pytest.raises(ClientError):
+        ing.fetch_and_stage_chunks(REF)
+
+
 def test_embed_batch_makes_one_ranged_get_and_one_embed_call(wired):
     staging, _know, s3, voy = wired
     n = ing.fetch_and_stage_chunks(REF)["n"]

@@ -3,6 +3,11 @@
 AWS emits ``eventName`` like ``ObjectCreated:Put``; some S3-compatible stores prefix it
 as ``s3:ObjectCreated:Put``. Both share the ``Records[].s3`` shape, so one parser
 handles all of them.
+
+Created, removed and lifecycle-expired objects all yield a ref. Each starts the same
+IngestWorkflow, which reads the bucket's current state rather than trusting the event:
+an object that is gone is cleared from the index, one that exists is (re)indexed.
+That also makes late or out-of-order delete events harmless.
 """
 
 from __future__ import annotations
@@ -12,6 +17,8 @@ from typing import Any
 from urllib.parse import unquote_plus
 
 from .models import S3Ref
+
+_INGEST_EVENTS = ("ObjectCreated", "ObjectRemoved", "LifecycleExpiration")
 
 
 def refs_from_s3_event(event: dict[str, Any] | str | bytes) -> list[S3Ref]:
@@ -35,7 +42,8 @@ def refs_from_s3_event(event: dict[str, Any] | str | bytes) -> list[S3Ref]:
 
     refs: list[S3Ref] = []
     for rec in event["Records"]:
-        if "ObjectCreated" not in rec.get("eventName", ""):
+        name = rec.get("eventName", "")
+        if not any(kind in name for kind in _INGEST_EVENTS):
             continue
         s3 = rec.get("s3", {})
         bucket = s3.get("bucket", {}).get("name", "")

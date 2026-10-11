@@ -42,6 +42,16 @@ class Span:
     kind: str = "byte"
 
 
+@dataclass
+class ReconcileRequest:
+    """Input to ReconcileWorkflow: which bucket (and prefix) to bring back in line."""
+
+    bucket: str
+    prefix: str = ""
+    target_collection: str | None = None
+    max_starts: int = 500  # ingests started per run; the rest wait for the next sweep
+
+
 def doc_id_for_uri(uri: str) -> str:
     """Stable, filesystem/workflow-id-safe document id derived from a source URI."""
     return hashlib.sha1(uri.encode("utf-8")).hexdigest()[:16]

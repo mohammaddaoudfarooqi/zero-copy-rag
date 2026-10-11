@@ -365,10 +365,9 @@ With the notification in place, seed with `NO_TRIGGER=1` so the upload is the on
 - Handler entrypoint: `pipeline.lambda_handler.lambda_handler`; package `pipeline/` with the
   `temporalio` dependency.
 - Give the Lambda network egress to your Temporal service and set `TEMPORAL_ADDRESS` and
-  `TEMPORAL_NAMESPACE` in its environment. The client in `pipeline/trigger.py` connects without
-  TLS, which suits a self-hosted Temporal service inside your network. Temporal Cloud needs mTLS
-  or an API key, and this repo does not configure either yet: add it to `get_client()` in
-  `pipeline/trigger.py` and to the worker before pointing them at Temporal Cloud.
+  `TEMPORAL_NAMESPACE` in its environment. For Temporal Cloud, also set `TEMPORAL_API_KEY`, or
+  `TEMPORAL_TLS_CERT` and `TEMPORAL_TLS_KEY` for mTLS (see Cloud infra references below). Keep
+  the API key in Secrets Manager rather than as a plain environment variable.
 - Wire the bucket's `s3:ObjectCreated:*` and `s3:ObjectRemoved:*` notifications to the Lambda
   (S3 console or IaC). Without the removal events, a deleted object's chunks stay searchable and
   read back as `missing`. Add `s3:LifecycleExpiration:*` too if the bucket has expiry rules.
@@ -482,9 +481,22 @@ the Lambda in section 9 is what makes ingestion automatic. Until that exists, `m
 | Temporal Cloud        | [temporal.io/cloud](https://temporal.io/cloud)                                   |
 | Self-hosted with Helm | [docs.temporal.io/self-hosted-guide](https://docs.temporal.io/self-hosted-guide) |
 
-Pointing `TEMPORAL_ADDRESS` at Temporal Cloud is not enough on its own: the worker and
-`pipeline/trigger.py` connect without TLS, and Temporal Cloud requires mTLS or an API key. That
-connection code does not exist in this repo yet (section 9).
+The worker, `make seed` and the Lambda all connect through `get_client()` in
+`pipeline/trigger.py`, so one set of settings covers all three. For Temporal Cloud, in `.env` (or
+the Lambda's environment):
+
+```bash
+TEMPORAL_ADDRESS=<namespace>.<account>.tmprl.cloud:7233   # the endpoint your namespace shows
+TEMPORAL_NAMESPACE=<namespace>.<account>
+TEMPORAL_API_KEY=<api-key>                                  # or, for mTLS instead:
+# TEMPORAL_TLS_CERT=/path/to/client.pem
+# TEMPORAL_TLS_KEY=/path/to/client.key
+```
+
+An API key turns TLS on by itself. Setting both an API key and the mTLS pair, or only half of the
+pair, fails at connect time with a message naming the settings. With all three blank the client
+connects without TLS, which is what the local dev server and a self-hosted service inside your
+network expect.
 
 ### Voyage AI (via MongoDB Atlas Models)
 

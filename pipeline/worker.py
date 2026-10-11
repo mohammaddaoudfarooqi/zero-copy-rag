@@ -13,6 +13,7 @@ from temporalio.worker import Worker
 
 from .activities import ALL_ACTIVITIES
 from .config import settings
+from .trigger import get_client
 from .workflows import ALL_WORKFLOWS
 
 # Sync activities (pymongo, voyage, boto3) run in a thread pool of this size.
@@ -34,10 +35,7 @@ def build_worker(client: Client, executor: ThreadPoolExecutor) -> Worker:
 
 
 async def main() -> None:
-    client = await Client.connect(
-        settings.temporal_address,
-        namespace=settings.temporal_namespace,
-    )
+    client = await get_client()
 
     with ThreadPoolExecutor(max_workers=ACTIVITY_THREADS) as executor:
         worker = build_worker(client, executor)

@@ -167,7 +167,7 @@ Engine** (`mongodb_agent_engine/`), with two sub-agents split by capability:
   span, score), never text.
 - **`source-reader`** is the only sub-agent given the tool that resolves pointers against the
   source object and returns the text behind them, hash-verified at read time. It reads at most
-  twelve chunks per call, concurrently, and only chunk ids that a search returned.
+  sixteen chunks per call, concurrently, and only chunk ids that a search returned.
 
 ```mermaid
 flowchart LR

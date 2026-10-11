@@ -46,7 +46,7 @@ from deepagents import SubAgent
 app = App(app_name="zero-copy-rag")
 
 @app.tool(is_local=False)
-def search_knowledge(query: str, k: int = 12) -> str: ...
+def search_knowledge(query: str, k: int = 16) -> str: ...
 
 @app.entrypoint
 def build_agent():
@@ -97,7 +97,7 @@ the next section.
 This is the design's central claim, and it is easy to overstate.
 
 **Enforced in this repo.** `read_spans` accepts chunk_ids and nothing else, forwards each one
-positionally to `pipeline.spanio.read_span`, and reads at most twelve per call, only ids a
+positionally to `pipeline.spanio.read_span`, and reads at most sixteen per call, only ids a
 search returned. No caller, model or otherwise, can supply a bucket, key, ETag, byte range or content
 hash. `search_knowledge` wraps `pipeline.retrieval.vector_search`, whose projection has no `text`
 field, so the retrieval path cannot return document text at all. `tests/test_agent_wiring.py` pins
@@ -203,7 +203,7 @@ From the repository root:
 - **Reload during a request.** The dev stack hot-reloads on edits under `pipeline/` or
   `mongodb_agent_engine/`, and a request in flight fails with `connection refused`. That is the
   reload, not the agent.
-- **Long runs.** A run is dominated by model calls: the default question takes about 4.5 minutes
-  locally with 13 of them. Prompts alone did not limit reads (one run read 34 chunks by
+- **Long runs.** A run is dominated by model calls: the default question takes about 3 minutes
+  locally with 7 of them (up to 15 in other runs). Prompts alone did not limit reads (one run read 34 chunks by
   constructing chunk ids), which is why `read_spans` caps each call and reads only searched ids.
   Give clients a long timeout.

@@ -21,10 +21,16 @@ from ..extractors import get_extractor
 from ..extractors.base import UnsupportedSource
 from ..models import S3Ref, doc_id_for_uri, sha256_hex
 from ..search_index import ensure_vector_index
-from ..spanio import fetch_range
+from ..spanio import fetch_range, heading_context, heading_texts
 
 # S3 error codes that mean the object is gone, as opposed to unreadable.
 _GONE_CODES = {"NoSuchKey", "404"}
+
+# What goes into an embedding, versioned. 1: the chunk text alone. 2: the chunk's
+# heading path ("Outer > Inner > Section") followed by the chunk text. Bumping it makes
+# unchanged documents re-embed: the unchanged check and the reconcile sweep both
+# compare it with what the indexed pointers record.
+EMBED_VERSION = 2
 
 
 def _staging():
@@ -58,7 +64,8 @@ def fetch_and_stage_chunks(ref: S3Ref, target_collection: str | None = None) -> 
     # collection: checking the default one would report `unchanged` for a document the
     # target does not hold, and the target would never receive it.
     know = knowledge_collection(target_collection or settings.knowledge_collection)
-    if know.find_one({"doc_id": doc_id, "doc_content_hash": doc_hash}, {"_id": 1}):
+    if know.find_one({"doc_id": doc_id, "doc_content_hash": doc_hash,
+                      "embed_version": EMBED_VERSION}, {"_id": 1}):
         return {"doc_id": doc_id, "doc_hash": doc_hash, "n": 0, "status": "unchanged"}
 
     staging = _staging()
@@ -104,6 +111,25 @@ def fetch_and_stage_chunks(ref: S3Ref, target_collection: str | None = None) -> 
             "status": "staged", "extractor": extractor.name}
 
 
+def _headings(d: dict, blob: bytes, lo: int, hi: int) -> list[str]:
+    """Heading texts for one staged chunk. Headings inside the batch's byte range come
+    from the bytes already fetched; the rest (usually ancestors earlier in the file)
+    are ranged reads under the same ETag, cached across chunks."""
+    path = (d.get("metadata") or {}).get("heading_path") or []
+    inside = [s for s in path if lo <= s["start"] and s["end"] <= hi]
+    outside = [s for s in path if s not in inside]
+    fetched = dict(zip(
+        [(s["start"], s["end"]) for s in outside],
+        heading_texts(d["bucket"], d["key"], d["etag"], outside),
+        strict=True,
+    ))
+    return [
+        blob[s["start"] - lo : s["end"] - lo].decode("utf-8") if s in inside
+        else fetched[(s["start"], s["end"])]
+        for s in path
+    ]
+
+
 @activity.defn
 def embed_staged_batch(doc_id: str, ordinals: list[int], model: str | None = None) -> int:
     """Stage 2: re-read one contiguous byte range, verify it, embed the batch in one call.
@@ -135,7 +161,8 @@ def embed_staged_batch(doc_id: str, ordinals: list[int], model: str | None = Non
         segment = blob[d["span"]["start"] - lo : d["span"]["end"] - lo].decode("utf-8")
         if sha256_hex(segment) != d["content_hash"]:
             raise RuntimeError(f"span verification failed for {d['chunk_id']}")
-        texts.append(segment)
+        context = heading_context(_headings(d, blob, lo, hi))
+        texts.append(f"{context}\n\n{segment}" if context else segment)
 
     activity.heartbeat(f"{doc_id}:verified:{len(texts)}")
 
@@ -155,8 +182,8 @@ def embed_staged_batch(doc_id: str, ordinals: list[int], model: str | None = Non
         [
             UpdateOne(
                 {"chunk_id": d["chunk_id"]},
-                {"$set": {"embedding": list(v), "model": use_model,
-                          "dim": len(v), "status": "embedded"}},
+                {"$set": {"embedding": list(v), "model": use_model, "dim": len(v),
+                          "embed_version": EMBED_VERSION, "status": "embedded"}},
             )
             for d, v in zip(todo, vectors, strict=True)
         ],
@@ -234,6 +261,7 @@ def index_document(doc_id: str, doc_hash: str, target_collection: str | None = N
                 "key": c["key"],
                 "etag": c["etag"],
                 "metadata": c.get("metadata", {}),
+                "embed_version": c.get("embed_version", 1),
             }},
             upsert=True,
         )

@@ -23,7 +23,8 @@ def format_hit(hit: dict, resolved: dict) -> str:
     header = f"[{hit['score']:.4f}] {hit['source_uri']} #{hit['chunk_id']} {hit['span']}"
     if resolved["status"] == "ok":
         snippet = resolved["text"][:160].replace("\n", " ")
-        return f"{header}\n    {snippet}...\n"
+        context = f"\n    [{resolved['context']}]" if resolved.get("context") else ""
+        return f"{header}{context}\n    {snippet}...\n"
     return f"{header}\n    <{resolved['status']}: text not available>\n"
 
 

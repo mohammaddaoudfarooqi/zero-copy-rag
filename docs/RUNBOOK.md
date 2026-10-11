@@ -324,7 +324,7 @@ db.knowledge_zc.countDocuments({ text: { $exists: true } })   // 0
 ### Measure retrieval quality
 
 ```bash
-make eval                 # recall at k=12 (the agent's read cap) and k=24
+make eval                 # recall at k=12 and k=24 (the agent reads 16)
 make eval K=12 MIN_RECALL=0.75   # exit non-zero below the threshold
 ```
 
@@ -334,9 +334,10 @@ from it. The eval runs the agent's retrieval for each question, reads the hits b
 the phrases each question missed. It needs Atlas, Voyage and the bucket, so it is not part of CI;
 `tests/test_eval_retrieval.py` checks the scoring and that every phrase exists in the document.
 
-On the seed document: 79% recall at k=12 and 84% at k=24. All of the k=12 misses are the four
-phase headings of the implementation-stages question. Each heading is its own small chunk, and
-the sections under it are embedded without it, so raising the cap barely helps.
+On the seed document, with chunks embedded under their heading path: 89% recall at k=12, 95% at
+k=14 and 100% from k=16, which is why the agent reads up to 16. Before heading context the same
+cases scored 79% at k=12 and 84% at k=24, all misses being the phase headings of the
+implementation-stages question.
 
 ### Reconcile the index with the bucket
 
@@ -420,7 +421,7 @@ workspace.
 side uses:
 
 - `search_knowledge` wraps `pipeline.retrieval.vector_search` and returns pointers only.
-- `read_spans` calls `pipeline.spanio.read_span` for up to twelve `chunk_id`s that a search
+- `read_spans` calls `pipeline.spanio.read_span` for up to sixteen `chunk_id`s that a search
   returned, concurrently, and takes nothing but chunk_ids.
 
 These are split across two sub-agents, `knowledge-retriever` (search only) and `source-reader`
@@ -445,8 +446,8 @@ curl -X POST http://localhost:<oe-port>/invoke \
   -d '{"message": "your question here"}'
 ```
 
-A full run takes minutes, mostly model calls: the default question took about 4.5 minutes with
-13 model calls and 2 tool calls on the local stack. Give curl a generous `-m`, or it will time
+A full run takes minutes, mostly model calls: the default question took about 3 minutes with 7
+model calls and 2 tool calls on the local stack (earlier runs made up to 15 model calls). Give curl a generous `-m`, or it will time
 out on a run that is still working.
 
 Two things to know when a run misbehaves:

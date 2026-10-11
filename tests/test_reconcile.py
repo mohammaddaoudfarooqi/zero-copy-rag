@@ -44,7 +44,12 @@ class _FakeKnow:
         prefix = next((s["$match"]["key"]["$regex"] for s in pipeline
                        if "$match" in s and "key" in s["$match"]), "^")
         import re
-        return [{"_id": k, "etag": e} for k, e in self.indexed.items() if re.match(prefix, k)]
+        out = []
+        for k, v in self.indexed.items():
+            if re.match(prefix, k):
+                etag, version = (v, rec.EMBED_VERSION) if isinstance(v, str) else v
+                out.append({"_id": k, "etag": etag, "version": version})
+        return out
 
 
 def _obj(key, etag):
@@ -124,3 +129,15 @@ def test_schedule_intervals_parse(text, delta):
 def test_bad_schedule_intervals_are_refused(text):
     with pytest.raises(ValueError):
         reconcile.parse_interval(text)
+
+
+def test_keys_embedded_under_an_older_recipe_are_planned(plan):
+    """After EMBED_VERSION changes, one sweep re-embeds the unchanged corpus."""
+    out, *_ = plan([{"Contents": [_obj("old.md", "e1"), _obj("current.md", "e2")]}],
+                   {"old.md": ("e1", rec.EMBED_VERSION - 1), "current.md": "e2"})
+    assert out["ingest"] == ["old.md"]
+
+
+def test_pointers_from_before_versioning_count_as_version_one(plan):
+    out, *_ = plan([{"Contents": [_obj("legacy.md", "e1")]}], {"legacy.md": ("e1", None)})
+    assert out["ingest"] == ["legacy.md"]

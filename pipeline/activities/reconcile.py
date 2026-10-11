@@ -3,7 +3,9 @@
 The bucket is the source of truth. A sweep catches what event notifications missed:
 objects whose ObjectCreated or ObjectRemoved event was dropped, and anything uploaded
 before the trigger existed. It compares ETags from the bucket listing with the ETags
-recorded on the indexed pointers, so unchanged objects are never downloaded.
+recorded on the indexed pointers, so unchanged objects are never downloaded. A key
+whose pointers were embedded under an older EMBED_VERSION is planned too, so one sweep
+re-embeds the corpus after the embedding recipe changes.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from temporalio import activity
 from ..clients import knowledge_collection, s3_client
 from ..config import settings
 from ..extractors.factory import has_supported_extension
+from .ingest import EMBED_VERSION
 
 
 def _listed(bucket: str, prefix: str) -> dict[str, str]:
@@ -28,21 +31,26 @@ def _listed(bucket: str, prefix: str) -> dict[str, str]:
     return out
 
 
-def _indexed(bucket: str, prefix: str, target_collection: str | None) -> dict[str, str]:
-    """key -> ETag recorded on that key's indexed pointers."""
+def _indexed(bucket: str, prefix: str, target_collection: str | None) -> dict[str, dict]:
+    """key -> {etag, version}: the ETag and lowest embed_version on that key's pointers."""
     match: dict = {"bucket": bucket}
     if prefix:
         match["key"] = {"$regex": "^" + re.escape(prefix)}
     coll = knowledge_collection(target_collection or settings.knowledge_collection)
-    rows = coll.aggregate([{"$match": match}, {"$group": {"_id": "$key", "etag": {"$first": "$etag"}}}])
-    return {row["_id"]: row["etag"] for row in rows}
+    rows = coll.aggregate([{"$match": match}, {"$group": {
+        "_id": "$key", "etag": {"$first": "$etag"}, "version": {"$min": "$embed_version"}}}])
+    # Pointers written before versioning carry no embed_version: they are version 1.
+    return {row["_id"]: {"etag": row["etag"], "version": row.get("version") or 1} for row in rows}
 
 
 @activity.defn
 def plan_reconcile(bucket: str, prefix: str = "", target_collection: str | None = None) -> dict:
     listed = _listed(bucket, prefix)
     indexed = _indexed(bucket, prefix, target_collection)
-    ingest = sorted(k for k, etag in listed.items() if indexed.get(k) != etag)
+    ingest = sorted(
+        k for k, etag in listed.items()
+        if k not in indexed or indexed[k]["etag"] != etag or indexed[k]["version"] < EMBED_VERSION
+    )
     orphans = sorted(k for k in indexed if k not in listed)
     activity.logger.info(
         "reconcile s3://%s/%s: %d listed, %d indexed, %d to ingest, %d orphaned",

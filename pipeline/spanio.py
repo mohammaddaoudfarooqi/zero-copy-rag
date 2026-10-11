@@ -27,6 +27,7 @@ _POINTER_PROJECTION = {
     "etag": 1,
     "span": 1,
     "content_hash": 1,
+    "metadata.heading_path": 1,
 }
 
 
@@ -66,6 +67,44 @@ def fetch_span(
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise SpanStale(f"{bucket}/{key} range does not decode as utf-8") from exc
+
+
+# Heading text by (bucket, key, etag, start, end). An ETag names one immutable version
+# of an object, so a cached heading can never be stale; ancestor headings are shared
+# by many chunks, so each is fetched about once per process.
+_HEADING_CACHE: dict[tuple[str, str, str, int, int], str] = {}
+_HEADING_CACHE_MAX = 4096
+
+
+def heading_texts(
+    bucket: str, key: str, etag: str, spans: list[dict], *, client: Any = None
+) -> list[str]:
+    """Decode a chunk's heading_path spans under the same ETag guard as the chunk."""
+    out: list[str] = []
+    for span in spans:
+        cache_key = (bucket, key, etag, span["start"], span["end"])
+        text = _HEADING_CACHE.get(cache_key) if client is None else None
+        if text is None:
+            text = fetch_span(bucket, key, etag, span["start"], span["end"], client=client)
+            if client is None:
+                if len(_HEADING_CACHE) >= _HEADING_CACHE_MAX:
+                    _HEADING_CACHE.clear()
+                _HEADING_CACHE[cache_key] = text
+        out.append(text)
+    return out
+
+
+def _is_span(span: object) -> bool:
+    if not isinstance(span, dict):
+        return False
+    start, end = span.get("start"), span.get("end")
+    return (isinstance(start, int) and isinstance(end, int) and not isinstance(start, bool)
+            and not isinstance(end, bool) and 0 <= start < end)
+
+
+def heading_context(titles: list[str]) -> str:
+    """'Outer > Inner > Section', the form both embedding input and reads use."""
+    return " > ".join(t.strip() for t in titles if t.strip())
 
 
 def _pointer_is_usable(doc: dict) -> bool:
@@ -144,4 +183,19 @@ def read_span(chunk_id: str, *, collection: Any = None, client: Any = None) -> d
 
     if sha256_hex(text) != doc["content_hash"]:
         return {**base, "status": "stale"}
-    return {**base, "status": "ok", "text": text}
+
+    result = {**base, "status": "ok", "text": text}
+    path = (doc.get("metadata") or {}).get("heading_path") or []
+    if not isinstance(path, list) or not all(_is_span(s) for s in path):
+        path = []  # malformed context is dropped; the verified text still stands
+    if path:
+        # The section headings the chunk sits under, read from the same object version.
+        # A failure here means the object changed between two reads: report that.
+        try:
+            titles = heading_texts(doc["bucket"], doc["key"], doc["etag"], path, client=client)
+        except SpanMissing:
+            return {**base, "status": "missing"}
+        except SpanStale:
+            return {**base, "status": "stale"}
+        result["context"] = heading_context(titles)
+    return result

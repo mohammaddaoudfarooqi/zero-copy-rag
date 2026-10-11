@@ -327,7 +327,13 @@ real error behind a timeout.
   extractor, and stages pointer-only documents in `chunks_staging`. Never writes chunk text.
 - `embed_staged_batch`: re-reads exactly the byte range covering one batch, decodes it, verifies
   each chunk's sha256 against its staged `content_hash`, and embeds the whole batch in one Voyage
-  call. Raises rather than silently indexing a chunk whose bytes no longer match what was staged.
+  call. Each embedding input is the chunk's heading path (`Outer > Inner > Section`) followed by
+  the chunk text. Headings inside the batch's range come from the bytes already fetched; the
+  rest are ranged reads under the same ETag, cached per object version. The stored span is
+  still exactly the chunk; only the vector carries the context. Each pointer records
+  `embed_version` (`EMBED_VERSION`, now 2), and both the unchanged check and the reconcile sweep
+  re-embed a document whose pointers carry an older version, so one `make reconcile` upgrades
+  the corpus after the recipe changes. Raises rather than silently indexing a chunk whose bytes no longer match what was staged.
 - `index_document`: upserts embedded pointers into the searchable collection, prunes any ordinal
   not among those just written (leftovers from a previous longer version), and ensures the vector
   index. With zero staged chunks it distinguishes two cases by asking the searchable collection
@@ -376,6 +382,20 @@ Decoding failure (`UnicodeDecodeError`) or a byte map that does not cover the wh
 The base provides `window_indices()`, a character-window splitter with overlap, trimmed inward
 past whitespace at both edges. Default `chunk_size=1200`, `chunk_overlap=150` (configurable via
 `.env`).
+
+### Heading path
+
+Every chunk carries `metadata.heading_path`: byte spans of the headings it sits under, outermost
+first, ending with its own section heading. Ancestors follow heading levels. Many documents are
+exported flat, with a group marked by an empty-bodied heading at the same level as its sections
+(`### 1. Phase 1: Assessment and planning`, then `### Objectives`), so an empty-bodied heading
+also labels the same-level sections after it, until the next group heading at that level or a
+higher-level heading. A numbered empty heading always opens a group; an unnumbered one does so
+only when no numbered group is open at that level, because inside a numbered group an empty
+`### Key activities` is a sub-heading. The path is spans only, never heading text, and it is used
+twice: as embedding context (section 6) and as the `context` returned with each read (section 11).
+On the seed document this took `make eval` recall at k=12 from 79% to 89%, entirely through
+retrieval: scoring chunk text alone gives the same numbers.
 
 ### Registered extractors
 
@@ -442,7 +462,10 @@ itself signals the invariant: **z**ero-**c**opy.
   "bucket": "temporal-agentic",
   "key": "docs/my-doc.md",
   "etag": "\"...\"",
-  "metadata": { "extractor": "markdown", "section": 0 }
+  "metadata": { "extractor": "markdown", "section": 0,
+                "heading_span": { "start": 2, "end": 8 },
+                "heading_path": [{ "start": 2, "end": 8 }] },
+  "embed_version": 2
 }
 ```
 
@@ -592,14 +615,15 @@ the cluster's IP access list rather than through the HTTPS egress allow-list abo
 `mongodb_agent_engine/app.py` registers two tools directly on top of `pipeline/` code, both with
 `is_local=False` so they run in the Tool Pod rather than in the agent runtime:
 
-- `search_knowledge(query, k=12)` wraps `pipeline.retrieval.vector_search` and records the
+- `search_knowledge(query, k=16)` wraps `pipeline.retrieval.vector_search` and records the
   returned `chunk_id`s for the session. It can never return document text: the underlying
   `$vectorSearch` projection has no `text` key by construction.
 - `read_spans(chunk_ids)` calls `pipeline.spanio.read_span` once per distinct `chunk_id`,
-  positionally and concurrently, for at most `READ_LIMIT` (12) of them; the rest come back
+  positionally and concurrently, for at most `READ_LIMIT` (16) of them; the rest come back
   `skipped`. It reads only ids a search returned in this session (the tool sandbox is reserved
   per session and reset between sessions); any other id comes back `not_found_by_search`.
-  Each result carries text only when `status == "ok"`.
+  Each result carries text only when `status == "ok"`, plus `context`: the section headings the
+  chunk sits under (section 7), read from the same object version.
 
 The read limits are in code because the prompt alone did not hold. Chunk ids are predictable
 (`doc_id:ordinal`), and one answer read 34 chunks by constructing ids, each read a separate tool
@@ -609,15 +633,19 @@ round trip of 7 to 9 seconds. Measured on the same question through the local st
 | --- | --- | --- | --- | --- | --- |
 | One read per call, prompt-only limit | 35 | 34 | 16 | about 7 min | Phases 1 to 4 |
 | Batched, search-gated, 12 per call | 2 | 12 | 13 | 4.5 min | Phases 1 to 3 |
+| Plus heading context, 16 per call | 2 | 16 | 7 | 2.9 min | Phases 1 to 4, each sub-section attributed |
 
-Model calls, about 15 to 25 seconds each, now dominate the run time. Letting the agent run
-several search-then-read rounds recovered no time: one such run made 35 model calls and hit the
-execution timeout. The trade-off accepted is coverage: a question whose answer spans more than
-twelve chunks gets a partial answer that says what it did not cover.
+Model calls, about 15 to 25 seconds each, dominate the run time. Letting the agent run several
+search-then-read rounds recovered no time: one such run made 35 model calls and hit the
+execution timeout. Sixteen is where `make eval` recall reached 100% on the seed document once
+chunks were embedded with their heading context; a question whose answer spans more than sixteen
+chunks gets a partial answer. The prompt also forbids stating a count or calling a list complete
+unless a read text says so: before that rule, an answer that had read three phases said the
+document had three.
 
 These are split across two sub-agents: `knowledge-retriever` (tools=[`search_knowledge`]) and
 `source-reader` (tools=[`read_spans`]). The parent agent is built with `tools=[]`, so it has to
-delegate. Its instructions tell it to delegate once to each: one search, then at most twelve
+delegate. Its instructions tell it to delegate once to each: one search, then at most sixteen
 of the returned `chunk_id`s to `source-reader` in a single task, with a second read only if every
 read in the first came back unavailable. It quotes only text that came back with `status == "ok"`.
 
@@ -861,14 +889,12 @@ shadow agent's active pointer at it to compare retrieval quality before cutting 
 (`infra/eval_retrieval.py`) gives the comparison a number: the share of expected phrases from
 `evals/retrieval_cases.json` that the top-k chunks contain, counting only verified reads.
 
-### Open item: section context in embeddings
+### Open item: tiny trailing windows
 
-The Markdown extractor splits at every heading, so a heading such as `Phase 1: Assessment and
-planning` becomes its own short chunk and the sections under it are embedded without it. On the
-seed document that is the whole of the eval's k=12 miss: none of the four phase headings come
-back for the implementation-stages question, and doubling k recovers one. Embedding each chunk
-together with its heading path, while the stored span stays the exact source bytes, would keep
-the zero-copy contract and give the sub-sections their context. Not implemented.
+`window_indices` can leave a very short final window at the end of a long section (one chunk on
+the seed document is just `me.`). It is valid and verifies, but it carries no meaning, and a
+read of it reaches the agent as a fragment. Merging a final window shorter than the overlap into
+the previous one would remove it; not implemented.
 
 ### Observability hooks
 

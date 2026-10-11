@@ -35,7 +35,7 @@ _FOUND: set[str] = set()
 # external APIs, and it is what lets agent.yaml grant MongoDB, Voyage and AWS
 # credentials to the tool sandbox alone.
 @app.tool(is_local=False)
-def search_knowledge(query: str, k: int = 12) -> str:
+def search_knowledge(query: str, k: int = 16) -> str:
     """Search the indexed corpus. Returns citations, not text.
 
     Each result is a pointer: chunk_id, source_uri, ordinal, span, metadata and
@@ -50,22 +50,23 @@ def search_knowledge(query: str, k: int = 12) -> str:
     return json.dumps({"results": results})
 
 
-# Most chunks one read_spans call will read: one search's worth (k defaults to 12).
+# Most chunks one read_spans call will read: one search's worth (k defaults to 16,
+# where `make eval` recall reached 100% on the seed document).
 # A prompt alone did not hold the line: one run read 34 chunks for one question,
 # each a separate tool round trip. Reads in one call run concurrently.
-READ_LIMIT = 12
+READ_LIMIT = 16
 
 
 @app.tool(is_local=False)
 def read_spans(chunk_ids: list[str]) -> str:
-    """Read the exact source text behind up to twelve chunk_ids, in one call.
+    """Read the exact source text behind up to sixteen chunk_ids, in one call.
 
     Takes only chunk_ids that search_knowledge returned; any other id comes back
     with status "not_found_by_search" and is not read. Each pointer is resolved
     server-side and its bytes are verified against the hash recorded at index
     time. A result whose status is not "ok" carries no text: say that source is
     unavailable rather than answering from the search result alone. chunk_ids
-    beyond the first twelve come back with status "skipped" and are not read.
+    beyond the first sixteen come back with status "skipped" and are not read.
 
     Args:
         chunk_ids: chunk_ids returned by search_knowledge, used verbatim. Pass
@@ -115,13 +116,17 @@ You answer questions about the indexed corpus, and only from what that corpus sa
 
 Work in two steps, each delegated once. First ask knowledge-retriever for
 pointers, which carry no text. Then send the most promising of the chunk_ids it
-returned, at most twelve, to source-reader in a single task; it reads them all
+returned, at most sixteen, to source-reader in a single task; it reads them all
 in one call, and it cannot read a chunk_id the search did not return. Delegate a
 second time only if every read in the first batch came back unavailable. Answer
 from what those reads returned, and say what the sources did not cover rather
 than searching again: every extra delegation costs several model calls.
 
-Quote only text that source-reader returned with status "ok". If a read comes
+Quote only text that source-reader returned with status "ok". Each text comes
+with its context, the headings it sits under; use them to say which part of the
+document a passage belongs to. Never state how many parts something has, or present
+a list as complete, unless a text you read says so: if you read three phases, say
+which phases you read, not that there are three. If a read comes
 back stale, missing or unknown, say the source is unavailable and name its
 source_uri. Never reconstruct or paraphrase a span you could not read, and never
 answer from a search result alone: search results carry no text, so anything you
@@ -137,7 +142,9 @@ read document text, so you must not produce any: report the pointers and stop.
 
 READER_PROMPT = """\
 Call read_spans exactly once, passing every chunk_id you were given exactly as
-you received it. Return each text exactly as it comes back. For a result whose
+you received it. Return each text exactly as it comes back, together with its
+context: the section headings that chunk sits under, which say what the text is
+part of. For a result whose
 status is not "ok", report the status and the chunk_id and return no text for it.
 """
 

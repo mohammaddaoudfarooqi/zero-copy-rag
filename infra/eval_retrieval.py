@@ -42,7 +42,8 @@ def score_case(expect: list[str], texts: list[str]) -> tuple[list[str], list[str
 def run_case(case: dict, k: int) -> dict:
     hits = vector_search(case["question"], k=k)
     reads = [read_span(hit["chunk_id"]) for hit in hits]
-    texts = [r["text"] for r in reads if r.get("status") == "ok"]
+    # What the agent receives: each verified text plus the headings it sits under.
+    texts = [f"{r.get('context', '')}\n{r['text']}" for r in reads if r.get("status") == "ok"]
     found, missing = score_case(case["expect"], texts)
     return {"question": case["question"], "found": found, "missing": missing,
             "unreadable": len(reads) - len(texts)}

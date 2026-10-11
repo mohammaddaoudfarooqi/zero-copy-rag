@@ -278,6 +278,7 @@ zero-copy-rag/
 │   ├── create_atlas_index.py       ← `make index`
 │   ├── query_atlas.py              ← `make query`
 │   ├── eval_retrieval.py           ← `make eval`: recall of expected phrases in the top-k chunks
+│   ├── eval_agent.py               ← `make eval-agent`: repeated agent runs, time and coverage
 │   └── atlas_indexes.json          ← Vector Search index definitions
 └── docs/
     ├── RUNBOOK.md                  ← developer setup guide

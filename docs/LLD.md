@@ -635,7 +635,7 @@ round trip of 7 to 9 seconds. Measured on the same question through the local st
 | --- | --- | --- | --- | --- | --- |
 | One read per call, prompt-only limit | 35 | 34 | 16 | about 7 min | Phases 1 to 4 |
 | Batched, search-gated, 12 per call | 2 | 12 | 13 | 4.5 min | Phases 1 to 3 |
-| Plus heading context, 16 per call | 2 | 16 | 7 | 2.9 min | Phases 1 to 4, each sub-section attributed |
+| Plus heading context, 16 per call | 3 to 5 | 16 | 14 to 17 | median 309 s over 3 runs (281 to 313) | Phases 1 to 4 in all three runs |
 
 Model calls, about 15 to 25 seconds each, dominate the run time. Letting the agent run several
 search-then-read rounds recovered no time: one such run made 35 model calls and hit the

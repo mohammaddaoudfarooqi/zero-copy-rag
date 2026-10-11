@@ -857,7 +857,18 @@ the listing paged across runs.
 ### Model A/B testing
 
 Re-ingest into a third collection with a different `VOYAGE_MODEL` (section 5.2) and point a
-shadow agent's active pointer at it to compare retrieval quality before cutting over.
+shadow agent's active pointer at it to compare retrieval quality before cutting over. `make eval`
+(`infra/eval_retrieval.py`) gives the comparison a number: the share of expected phrases from
+`evals/retrieval_cases.json` that the top-k chunks contain, counting only verified reads.
+
+### Open item: section context in embeddings
+
+The Markdown extractor splits at every heading, so a heading such as `Phase 1: Assessment and
+planning` becomes its own short chunk and the sections under it are embedded without it. On the
+seed document that is the whole of the eval's k=12 miss: none of the four phase headings come
+back for the implementation-stages question, and doubling k recovers one. Embedding each chunk
+together with its heading path, while the stored span stays the exact source bytes, would keep
+the zero-copy contract and give the sub-sections their context. Not implemented.
 
 ### Observability hooks
 

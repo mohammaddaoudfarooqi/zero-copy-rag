@@ -203,7 +203,7 @@ From the repository root:
 - **Reload during a request.** The dev stack hot-reloads on edits under `pipeline/` or
   `mongodb_agent_engine/`, and a request in flight fails with `connection refused`. That is the
   reload, not the agent.
-- **Long runs.** A run is dominated by model calls: the default question takes about 3 minutes
-  locally with 7 of them (up to 15 in other runs). Prompts alone did not limit reads (one run read 34 chunks by
+- **Long runs.** A run is dominated by model calls: over three local runs the default question
+  took a median of 309 s (281 to 313; `make eval-agent`). Prompts alone did not limit reads (one run read 34 chunks by
   constructing chunk ids), which is why `read_spans` caps each call and reads only searched ids.
   Give clients a long timeout.

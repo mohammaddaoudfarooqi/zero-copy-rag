@@ -155,6 +155,10 @@ query: check-env ## Vector-search the active collection (Q="your question")
 eval: check-env ## Retrieval eval: share of expected phrases in the top-k chunks (K="12 24" by default)
 	$(PY) -m infra.eval_retrieval $(foreach k,$(or $(K),12 24),--k $(k)) $(if $(MIN_RECALL),--min-recall $(MIN_RECALL))
 
+.PHONY: eval-agent
+eval-agent: check-env ## Run one question through the local agent RUNS times (default 3) and report the spread
+	$(PY) -m infra.eval_agent --runs $(or $(RUNS),3) $(if $(Q_AGENT),--question "$(Q_AGENT)")
+
 .PHONY: reconcile
 reconcile: check-env ## Sweep S3_BUCKET once and ingest what events missed (PREFIX=... optional)
 	$(PY) -m pipeline.reconcile $(if $(PREFIX),--prefix $(PREFIX))

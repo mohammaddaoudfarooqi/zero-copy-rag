@@ -339,6 +339,23 @@ windows: 95% recall at k=12 and 100% from k=16, which is why the agent reads up 
 cases scored 79% at k=12 and 84% at k=24, all misses being the phase headings of the
 implementation-stages question.
 
+### Measure the agent
+
+```bash
+make eval-agent                  # the stages question, 3 runs through the local dev stack
+make eval-agent RUNS=5 Q_AGENT="What is Constitutional AI?"
+```
+
+One agent run says little, because model latency and what the agent reads both vary. This sends
+the same question several times to the local Orchestration Engine and reports each run's time,
+the share of the question's expected phrases (from `evals/retrieval_cases.json`) its answer
+contains, and the chunks it cites, then the median and range. It needs `make playground`
+running. The local `/invoke` reply carries no answer text, so the script reads each answer from
+the dev stack's execution store by `execution_id`.
+
+On the stages question, three runs: median 309 s (281 to 313), all three naming all four phases
+(100% coverage), 16 chunks cited each.
+
 ### Reconcile the index with the bucket
 
 An event can be lost, and objects uploaded before the trigger existed never fired one. The
@@ -446,9 +463,11 @@ curl -X POST http://localhost:<oe-port>/invoke \
   -d '{"message": "your question here"}'
 ```
 
-A full run takes minutes, mostly model calls: the default question took about 3 minutes with 7
-model calls and 2 tool calls on the local stack (earlier runs made up to 15 model calls). Give curl a generous `-m`, or it will time
-out on a run that is still working.
+A full run takes minutes, mostly model calls: over three runs of the default question through
+the local stack, the median was 309 seconds (281 to 313), with 14 to 17 model calls and 3 to 5
+tool calls each. Give curl a
+generous `-m`, or it will time out on a run that is still working. `make eval-agent` measures
+this (below).
 
 Two things to know when a run misbehaves:
 

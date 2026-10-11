@@ -321,6 +321,23 @@ db.knowledge_zc.countDocuments({ text: { $exists: true } })   // 0
 `tests/test_no_text_invariant.py` and `tests/test_index_pointers.py` pin that invariant, so a
 `text` field appearing in that collection means something bypassed the write path.
 
+### Measure retrieval quality
+
+```bash
+make eval                 # recall at k=12 (the agent's read cap) and k=24
+make eval K=12 MIN_RECALL=0.75   # exit non-zero below the threshold
+```
+
+`evals/retrieval_cases.json` holds questions about the seed document, each with phrases quoted
+from it. The eval runs the agent's retrieval for each question, reads the hits back through
+`read_span` (so only verified bytes count), and reports the share of expected phrases found and
+the phrases each question missed. It needs Atlas, Voyage and the bucket, so it is not part of CI;
+`tests/test_eval_retrieval.py` checks the scoring and that every phrase exists in the document.
+
+On the seed document: 79% recall at k=12 and 84% at k=24. All of the k=12 misses are the four
+phase headings of the implementation-stages question. Each heading is its own small chunk, and
+the sections under it are embedded without it, so raising the cap barely helps.
+
 ### Reconcile the index with the bucket
 
 An event can be lost, and objects uploaded before the trigger existed never fired one. The

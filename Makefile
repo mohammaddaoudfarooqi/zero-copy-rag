@@ -151,6 +151,10 @@ demo: start index seed playground ## Local end-to-end demo: pipeline, index, see
 query: check-env ## Vector-search the active collection (Q="your question")
 	$(PY) -m infra.query_atlas "$(Q)"
 
+.PHONY: eval
+eval: check-env ## Retrieval eval: share of expected phrases in the top-k chunks (K="12 24" by default)
+	$(PY) -m infra.eval_retrieval $(foreach k,$(or $(K),12 24),--k $(k)) $(if $(MIN_RECALL),--min-recall $(MIN_RECALL))
+
 .PHONY: reconcile
 reconcile: check-env ## Sweep S3_BUCKET once and ingest what events missed (PREFIX=... optional)
 	$(PY) -m pipeline.reconcile $(if $(PREFIX),--prefix $(PREFIX))

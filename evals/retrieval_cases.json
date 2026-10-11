@@ -1,0 +1,27 @@
+{
+  "_comment": "Retrieval eval for seed/ethical_governance.md. Each phrase is verbatim from the document; a case scores the share of its phrases found in the top-k chunks, read back through read_span. Matching ignores case and whitespace.",
+  "cases": [
+    {"question": "What are the implementation stages for constitutional AI?",
+     "expect": ["Phase 1: Assessment and planning", "Phase 2: Initial implementation", "Phase 3: Optimization", "Phase 4: Scale and mature"]},
+    {"question": "What is Queryable Encryption and why does it matter?",
+     "expect": ["allows encrypted data to be queried without decrypting it", "comply with regulations such as GDPR and HIPAA"]},
+    {"question": "How does role-based access control protect constitutional principles?",
+     "expect": ["restricts access to resources based on the roles assigned to users", "Role-based access control (RBAC)"]},
+    {"question": "What is a two-stage retrieval pipeline with reranking?",
+     "expect": ["followed by a reranking stage to refine the results"]},
+    {"question": "What does the cost of inaction look like for AI governance?",
+     "expect": ["regulatory fines, reputational damage, and loss of customer trust"]},
+    {"question": "What does Matryoshka representation learning provide?",
+     "expect": ["real-time adjustments to embedding dimensions"]},
+    {"question": "What is Constitutional AI?",
+     "expect": ["aligned with a set of pre-defined principles"]},
+    {"question": "How does constitutional AI apply to financial services?",
+     "expect": ["Target industry: Financial services", "Equal Credit Opportunity Act"]},
+    {"question": "What are change streams used for?",
+     "expect": ["real-time stream of changes made to a database"]},
+    {"question": "What indexing strategies are recommended?",
+     "expect": ["Create single-field indexes on frequently queried fields", "Create compound indexes on multiple fields that are queried together"]},
+    {"question": "What pain points does AI governance face at enterprise scale?",
+     "expect": ["Scalability bottlenecks", "Lack of transparency"]}
+  ]
+}

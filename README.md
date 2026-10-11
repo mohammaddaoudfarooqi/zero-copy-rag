@@ -253,6 +253,7 @@ zero-copy-rag/
 ├── dev.yaml                        ← local `agentengine dev up` settings only
 ├── .agentengineignore              ← narrows what `agentengine build` uploads
 ├── seed/                           ← sample Markdown documents for `make seed`
+├── evals/                          ← retrieval eval cases for the seed document
 ├── tests/                          ← pytest suite (docs/RUNBOOK.md section 4)
 ├── mongodb_agent_engine/
 │   ├── app.py                      ← hosted deep agent: search + read tools, two sub-agents
@@ -276,6 +277,7 @@ zero-copy-rag/
 ├── infra/
 │   ├── create_atlas_index.py       ← `make index`
 │   ├── query_atlas.py              ← `make query`
+│   ├── eval_retrieval.py           ← `make eval`: recall of expected phrases in the top-k chunks
 │   └── atlas_indexes.json          ← Vector Search index definitions
 └── docs/
     ├── RUNBOOK.md                  ← developer setup guide

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -150,6 +151,14 @@ def build_agent():
     diverging from that if the default changes.
     """
     logger.info("Building zero-copy-rag deep agent")
+    # The sub-agents only relay tool results, so they can run on a faster model than
+    # the parent that writes the answer. Agent Engine rejects a model name on a
+    # SubAgent, and wraps each sub-agent's model separately, so each gets its own LLM
+    # instance rather than a shared one. Unset: they inherit the parent's model.
+    sub_model = os.environ.get("LLM_SUBAGENT_MODEL", "").strip()
+
+    def sub() -> dict:
+        return {"model": build_llm(model=sub_model)} if sub_model else {}
     return app.deep_agent(
         # Raw model, not app.llm(...): deep_agent wraps it in SecureWrappedLLM.
         llm=build_llm(),
@@ -162,12 +171,14 @@ def build_agent():
                 description="Finds relevant chunks. Returns pointers only; cannot read content.",
                 system_prompt=RETRIEVER_PROMPT,
                 tools=_tools_named("search_knowledge"),
+                **sub(),
             ),
             SubAgent(
                 name="source-reader",
                 description="Reads the source text behind specific chunk_ids.",
                 system_prompt=READER_PROMPT,
                 tools=_tools_named("read_spans"),
+                **sub(),
             ),
         ],
         system_prompt=SYSTEM_PROMPT,

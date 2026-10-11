@@ -67,8 +67,9 @@ def test_window_indices_nonpositive_size_returns_trimmed_range():
 def test_window_indices_large_overlap_still_advances():
     text = "abcde"
     out = window_indices(text, 0, len(text), size=2, overlap=3)
-    # step = max(1, 2 - 3) = 1, so advances by 1 each iteration
-    assert out == [(0, 2), (1, 3), (2, 4), (3, 5), (4, 5)]
+    # step = max(1, 2 - 3) = 1, so advances by 1 each iteration, and stops at the
+    # window that reaches the end: (4, 5) would sit wholly inside (3, 5).
+    assert out == [(0, 2), (1, 3), (2, 4), (3, 5)]
     # Verify start indices are strictly increasing
     starts = [s for s, e in out]
     assert starts == sorted(set(starts))

@@ -26,11 +26,12 @@ from ..spanio import fetch_range, heading_context, heading_texts
 # S3 error codes that mean the object is gone, as opposed to unreadable.
 _GONE_CODES = {"NoSuchKey", "404"}
 
-# What goes into an embedding, versioned. 1: the chunk text alone. 2: the chunk's
-# heading path ("Outer > Inner > Section") followed by the chunk text. Bumping it makes
-# unchanged documents re-embed: the unchanged check and the reconcile sweep both
-# compare it with what the indexed pointers record.
-EMBED_VERSION = 2
+# How chunks and their embeddings are made, versioned. 1: the chunk text alone.
+# 2: the chunk's heading path ("Outer > Inner > Section") followed by the chunk text.
+# 3: no tail window that repeats the previous window's overlap. Bumping it makes
+# unchanged documents re-chunk and re-embed: the unchanged check and the reconcile
+# sweep both compare it with what the indexed pointers record.
+EMBED_VERSION = 3
 
 
 def _staging():

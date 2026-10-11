@@ -67,6 +67,10 @@ def window_indices(
         w0, w1 = trim_bounds(text, i, min(i + size, end))
         if w0 < w1:
             out.append((w0, w1))
+        if i + size >= end:
+            # This window reached the end. A later one would start inside its overlap
+            # and repeat its tail: a duplicate pointer that takes a search slot.
+            break
     return out
 
 

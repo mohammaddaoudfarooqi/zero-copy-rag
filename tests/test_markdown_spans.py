@@ -160,3 +160,24 @@ def test_unnumbered_group_labels_still_work_without_numbered_ones():
     paths = _paths(doc)
     assert paths["### Goals\n\nGoal text."] == ["Stages", "Planning", "Goals"]
     assert paths["### Goals\n\nMore goals."] == ["Stages", "Building", "Goals"]
+
+
+def test_windowing_stops_once_a_window_reaches_the_section_end():
+    """A later window would start inside the last one's overlap and repeat its tail."""
+    from pipeline.extractors.base import window_indices
+
+    text = "x" * 65
+    assert window_indices(text, 0, 65, 40, 10) == [(0, 40), (30, 65)]
+
+
+def test_no_chunk_is_contained_in_the_one_before_it():
+    """On the seed document five tail windows (one just "me.") duplicated bytes already
+    in the previous chunk, adding pointers and taking search slots for nothing."""
+    from itertools import pairwise
+    from pathlib import Path
+
+    body = (Path(__file__).resolve().parents[1] / "seed" / "ethical_governance.md").read_bytes()
+    chunks = MarkdownExtractor(chunk_size=1200, chunk_overlap=150).chunk(body)
+    for prev, c in pairwise(chunks):
+        if prev.meta["section"] == c.meta["section"]:
+            assert not (prev.span.start <= c.span.start and c.span.end <= prev.span.end), c.text[:30]

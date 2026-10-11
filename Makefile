@@ -151,6 +151,14 @@ demo: start index seed playground ## Local end-to-end demo: pipeline, index, see
 query: check-env ## Vector-search the active collection (Q="your question")
 	$(PY) -m infra.query_atlas "$(Q)"
 
+.PHONY: reconcile
+reconcile: check-env ## Sweep S3_BUCKET once and ingest what events missed (PREFIX=... optional)
+	$(PY) -m pipeline.reconcile $(if $(PREFIX),--prefix $(PREFIX))
+
+.PHONY: reconcile-schedule
+reconcile-schedule: check-env ## Run the sweep on a Temporal Schedule (EVERY=1h by default)
+	$(PY) -m pipeline.reconcile --every $(or $(EVERY),1h) $(if $(PREFIX),--prefix $(PREFIX))
+
 .PHONY: cutover
 cutover: check-env ## Point retrieval at another collection (TO=...), after re-ingesting into it. Refuses an empty one
 	$(PY) -m pipeline.cutover $(if $(TO),--to $(TO))

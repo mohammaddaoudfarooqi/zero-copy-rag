@@ -22,6 +22,17 @@ _BY_MIME: dict[str, type[Extractor]] = {
 }
 
 
+def has_supported_extension(key: str) -> bool:
+    """Whether the key's extension alone selects an extractor (used by the sweep).
+
+    Objects accepted only by content type are not covered: listing a bucket returns no
+    content types, and fetching each object's head to find out would cost a request
+    per object.
+    """
+    ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
+    return ext in _BY_EXT
+
+
 def get_extractor(key: str, content_type: str = "") -> Extractor:
     """Return the extractor for an object, or raise UnsupportedSource."""
     ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""

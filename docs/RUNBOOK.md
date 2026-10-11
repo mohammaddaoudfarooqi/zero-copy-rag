@@ -321,6 +321,22 @@ db.knowledge_zc.countDocuments({ text: { $exists: true } })   // 0
 `tests/test_no_text_invariant.py` and `tests/test_index_pointers.py` pin that invariant, so a
 `text` field appearing in that collection means something bypassed the write path.
 
+### Reconcile the index with the bucket
+
+An event can be lost, and objects uploaded before the trigger existed never fired one. The
+reconciliation sweep compares the bucket listing with the index by ETag and starts the ingests
+that bring them back in line, including clearing indexed keys whose object is gone:
+
+```bash
+make reconcile                       # one sweep of S3_BUCKET; PREFIX=docs/ to narrow it
+make reconcile-schedule EVERY=1h     # or keep a Temporal Schedule running it
+```
+
+It prints how many keys it listed, found indexed, planned and started. Unchanged objects are not
+downloaded, so a sweep of an up-to-date bucket starts nothing. Delete the schedule with
+`temporal schedule delete --schedule-id reconcile-<bucket>`. Details and limits are in
+`docs/LLD.md` section 15.
+
 ---
 
 ## 8. Model change: re-ingest + cutover

@@ -78,12 +78,15 @@ pipeline/
 ├── retrieval.py                     <- $vectorSearch over the active collection; returns pointers, never text
 ├── spanio.py                         <- the only module that resolves a pointer back into text
 ├── cutover.py                         <- flip the active collection/index/model pointer
+├── reconcile.py                        <- CLI: run or schedule the reconciliation sweep
 ├── seed.py                              <- dev utility: upload a file and start its ingest
 ├── workflows/
-│   └── ingest_workflow.py                <- IngestWorkflow: stage -> embed in batches -> index
+│   ├── ingest_workflow.py                <- IngestWorkflow: stage -> embed in batches -> index
+│   └── reconcile_workflow.py             <- ReconcileWorkflow: plan, then start the ingests
 ├── activities/
-│   └── ingest.py                            <- fetch_and_stage_chunks, embed_staged_batch,
-│                                                index_document, clear_document
+│   ├── ingest.py                            <- fetch_and_stage_chunks, embed_staged_batch,
+│   │                                            index_document, clear_document
+│   └── reconcile.py                         <- plan_reconcile: bucket listing against indexed ETags
 └── extractors/
     ├── base.py                                 <- Extractor ABC, char-to-byte-span conversion,
     │                                               window() splitter
@@ -819,27 +822,36 @@ The content-hash check in `fetch_and_stage_chunks` gives built-in incremental sy
 
 A dropped event is the one change this does not catch. S3 invokes the Lambda asynchronously, and
 an invocation that still fails after Lambda's retries is discarded unless a dead-letter queue or
-failure destination catches it. A lost delete leaves chunks that `read_span` reports `missing`. The reconciliation sweep below would close that gap;
-it is not implemented.
+failure destination catches it. A lost delete leaves chunks that `read_span` reports `missing`
+until the next reconciliation sweep (below) clears them.
 
 ### Scheduled reconciliation / full re-sync
 
-Because the object store (S3) is the source of truth, a **Temporal Scheduled Workflow** could
-list the bucket and start `IngestWorkflow` for each key, relying on content-hash dedupe to skip
-unchanged docs. This would also be the backstop for a dropped source-event notification (the one
-best-effort hop, on par with any broker-based design). This is a sketch, not implemented code:
+**Files:** `pipeline/workflows/reconcile_workflow.py`, `pipeline/activities/reconcile.py`,
+`pipeline/reconcile.py`
 
-```python
-@workflow.defn
-class FullSyncWorkflow:
-    @workflow.run
-    async def run(self, prefix: str) -> dict:
-        keys = await workflow.execute_activity(list_s3_keys, args=[prefix], ...)
-        for key in keys:
-            ref = S3Ref.make(bucket=settings.s3_bucket, key=key)
-            await workflow.execute_child_workflow(IngestWorkflow, args=[ref], ...)
-        return {"synced": len(keys)}
-```
+The bucket is the source of truth, so `ReconcileWorkflow` brings the index back in line with it.
+It is the backstop for the one best-effort hop, the event notification, and it also picks up
+objects uploaded before the trigger existed.
+
+1. `plan_reconcile` lists the bucket (optionally under a prefix) and groups the indexed pointers
+   by key. It compares each object's ETag from the listing with the ETag recorded on its
+   pointers, so unchanged objects are never downloaded. New or changed keys are planned for
+   ingest; indexed keys whose object is gone are orphans.
+2. The workflow starts the ordinary `IngestWorkflow` for each planned key, as an abandoned child
+   under the key's usual id. An orphan's ingest finds the object missing and clears it (section
+   10). A key whose ingest is already running is skipped (`already_running`), never terminated.
+3. At most `max_starts` (500) ingests start per run; the rest are reported as `deferred` and
+   picked up by the next sweep, which keeps the sweep's history bounded.
+
+`make reconcile` runs one sweep and prints the counts. `make reconcile-schedule EVERY=1h` creates
+or updates a Temporal Schedule (`reconcile-<bucket>`) with overlap policy `SKIP`.
+
+Limits: only keys whose extension the extractor factory accepts (`.md`, `.markdown`) are planned,
+because a listing carries no content type. An empty or undecodable Markdown file has no pointers,
+so every sweep plans it again; that costs one GET each time. The plan is returned as one activity
+result, which Temporal caps at 2 MB: roughly tens of thousands of keys. A larger bucket would need
+the listing paged across runs.
 
 ### Model A/B testing
 

@@ -265,9 +265,11 @@ zero-copy-rag/
 │   ├── retrieval.py                ← vector search, returns pointers, never text
 │   ├── spanio.py                   ← resolves a pointer against the source object, hash-verified
 │   ├── workflows/
-│   │   └── ingest_workflow.py      ← IngestWorkflow: stage → embed in batches → index
+│   │   ├── ingest_workflow.py      ← IngestWorkflow: stage → embed in batches → index
+│   │   └── reconcile_workflow.py   ← ReconcileWorkflow: catch what events missed
 │   ├── activities/
-│   │   └── ingest.py               ← stage + embed + index + clear activities
+│   │   ├── ingest.py               ← stage + embed + index + clear activities
+│   │   └── reconcile.py            ← plan a sweep: bucket listing against indexed ETags
 │   ├── extractors/                 ← Markdown extractor (byte spans); other formats are refused
 │   ├── config_store.py             ← active collection/index pointer
 │   └── search_index.py             ← idempotent Atlas Vector Search management

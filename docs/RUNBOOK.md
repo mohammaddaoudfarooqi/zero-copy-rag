@@ -387,8 +387,8 @@ workspace.
 side uses:
 
 - `search_knowledge` wraps `pipeline.retrieval.vector_search` and returns pointers only.
-- `read_spans` calls `pipeline.spanio.read_span` for up to six `chunk_id`s, concurrently, and
-  takes nothing but chunk_ids.
+- `read_spans` calls `pipeline.spanio.read_span` for up to twelve `chunk_id`s that a search
+  returned, concurrently, and takes nothing but chunk_ids.
 
 These are split across two sub-agents, `knowledge-retriever` (search only) and `source-reader`
 (read only). `mongodb_agent_engine/README.md` is the authoritative status of this deployment shim and
@@ -412,9 +412,9 @@ curl -X POST http://localhost:<oe-port>/invoke \
   -d '{"message": "your question here"}'
 ```
 
-A full run can take minutes, because the agent reads many spans before answering: one local run
-made 35 tool calls and took about 7 minutes. Give curl a generous `-m`, or it will time out on a
-run that is still working.
+A full run takes minutes, mostly model calls: the default question took about 4.5 minutes with
+13 model calls and 2 tool calls on the local stack. Give curl a generous `-m`, or it will time
+out on a run that is still working.
 
 Two things to know when a run misbehaves:
 

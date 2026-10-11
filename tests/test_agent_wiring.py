@@ -122,6 +122,7 @@ def test_tools_return_json_strings(agent_module, monkeypatch):
     """The platform requires a string return; a dict would reach the model unserialized."""
     monkeypatch.setattr(agent_module, "vector_search", lambda q, k=5: [])
     monkeypatch.setattr(agent_module, "_read_span", lambda c: {"chunk_id": c, "status": "unknown"})
+    agent_module._FOUND.add("d:0")
 
     searched = agent_module.search_knowledge("q")
     read = agent_module.read_spans(["d:0"])
@@ -182,6 +183,7 @@ def test_read_tool_forwards_the_chunk_id_and_injects_nothing(agent_module, monke
         return sentinel
 
     monkeypatch.setattr(agent_module, "_read_span", _spy)
+    agent_module._FOUND.add("d:0")
     out = json.loads(agent_module.read_spans(["d:0"]))
 
     assert seen["args"] == ("d:0",)
@@ -199,6 +201,9 @@ def reads(agent_module, monkeypatch):
         return {"chunk_id": chunk_id, "status": "ok", "text": f"text of {chunk_id}"}
 
     monkeypatch.setattr(agent_module, "_read_span", _fake)
+    # read_spans only reads ids a search returned; most tests are about reading,
+    # so mark a generous range as already found.
+    agent_module._FOUND.update(f"d:{i}" for i in range(50))
     return seen
 
 
@@ -231,3 +236,28 @@ def test_a_bare_string_is_treated_as_one_chunk_id(agent_module, reads):
     """Models sometimes pass a single id where a list is expected."""
     out = json.loads(agent_module.read_spans("d:7"))["results"]
     assert reads == ["d:7"] and out[0]["chunk_id"] == "d:7"
+
+
+def test_only_chunk_ids_a_search_returned_can_be_read(agent_module, monkeypatch):
+    """chunk_ids are predictable (doc_id:ordinal). Without this, a model reads past the
+    search results by constructing ids, which is what made one answer read 38 chunks."""
+    seen: list[str] = []
+    monkeypatch.setattr(agent_module, "_read_span", lambda c: seen.append(c) or {"chunk_id": c, "status": "ok", "text": "t"})
+    monkeypatch.setattr(agent_module, "vector_search", lambda q, k=12: [
+        {"chunk_id": "doc:4", "ordinal": 4, "source_uri": "s3://b/k.md",
+         "span": {"kind": "byte", "start": 0, "end": 9}, "metadata": {}, "score": 0.9}
+    ])
+    agent_module.search_knowledge("q")
+    out = {r["chunk_id"]: r for r in json.loads(agent_module.read_spans(["doc:4", "doc:5"]))["results"]}
+
+    assert seen == ["doc:4"]
+    assert out["doc:4"]["status"] == "ok"
+    assert out["doc:5"]["status"] == "not_found_by_search" and "text" not in out["doc:5"]
+
+
+def test_the_read_limit_matches_the_search_default(agent_module):
+    """One search's worth of hits fits in one read call."""
+    import inspect
+
+    k_default = inspect.signature(agent_module.search_knowledge).parameters["k"].default
+    assert agent_module.READ_LIMIT == k_default

@@ -589,19 +589,34 @@ the cluster's IP access list rather than through the HTTPS egress allow-list abo
 `mongodb_agent_engine/app.py` registers two tools directly on top of `pipeline/` code, both with
 `is_local=False` so they run in the Tool Pod rather than in the agent runtime:
 
-- `search_knowledge(query, k=8)` wraps `pipeline.retrieval.vector_search`. It can never return
-  document text: the underlying `$vectorSearch` projection has no `text` key by construction.
+- `search_knowledge(query, k=12)` wraps `pipeline.retrieval.vector_search` and records the
+  returned `chunk_id`s for the session. It can never return document text: the underlying
+  `$vectorSearch` projection has no `text` key by construction.
 - `read_spans(chunk_ids)` calls `pipeline.spanio.read_span` once per distinct `chunk_id`,
-  positionally and concurrently, for at most `READ_LIMIT` (6) of them; the rest come back with
-  status `skipped`. Each result carries text only when `status == "ok"`; `unknown`, `missing`,
-  `stale` and `skipped` carry none. The cap is in code because the prompt alone did not hold:
-  one run read 34 chunks for one question, each a separate round trip of 7 to 9 seconds.
+  positionally and concurrently, for at most `READ_LIMIT` (12) of them; the rest come back
+  `skipped`. It reads only ids a search returned in this session (the tool sandbox is reserved
+  per session and reset between sessions); any other id comes back `not_found_by_search`.
+  Each result carries text only when `status == "ok"`.
+
+The read limits are in code because the prompt alone did not hold. Chunk ids are predictable
+(`doc_id:ordinal`), and one answer read 34 chunks by constructing ids, each read a separate tool
+round trip of 7 to 9 seconds. Measured on the same question through the local stack:
+
+| Version | Tool calls | Chunks read | Model calls | Time | Answer |
+| --- | --- | --- | --- | --- | --- |
+| One read per call, prompt-only limit | 35 | 34 | 16 | about 7 min | Phases 1 to 4 |
+| Batched, search-gated, 12 per call | 2 | 12 | 13 | 4.5 min | Phases 1 to 3 |
+
+Model calls, about 15 to 25 seconds each, now dominate the run time. Letting the agent run
+several search-then-read rounds recovered no time: one such run made 35 model calls and hit the
+execution timeout. The trade-off accepted is coverage: a question whose answer spans more than
+twelve chunks gets a partial answer that says what it did not cover.
 
 These are split across two sub-agents: `knowledge-retriever` (tools=[`search_knowledge`]) and
 `source-reader` (tools=[`read_spans`]). The parent agent is built with `tools=[]`, so it has to
-delegate. Its instructions tell it to delegate once to each: one search, then at most six
-`chunk_id`s to `source-reader` in a single task, with a second read only if every read in the
-first came back unavailable. It quotes only text that came back with `status == "ok"`.
+delegate. Its instructions tell it to delegate once to each: one search, then at most twelve
+of the returned `chunk_id`s to `source-reader` in a single task, with a second read only if every
+read in the first came back unavailable. It quotes only text that came back with `status == "ok"`.
 
 The model is chosen in `mongodb_agent_engine/llm.py` from `LLM_PROVIDER` (default
 `anthropic`, model `claude-sonnet-5`) with an optional `LLM_MODEL` override, and optionally

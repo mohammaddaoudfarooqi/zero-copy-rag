@@ -22,13 +22,19 @@ load_dotenv()
 
 app = App(app_name="zero-copy-rag")
 
+# chunk_ids that search_knowledge has returned in this tool sandbox. The sandbox is
+# reserved for one session and reset before the next, so this is per session.
+# read_spans reads only these: chunk_ids are predictable (doc_id:ordinal), and
+# without the check a model reads past the search results by constructing ids.
+_FOUND: set[str] = set()
+
 
 # is_local=False puts both tools in the Tool Pod rather than in the agent
 # runtime. That is the placement the platform documents for database reads and
 # external APIs, and it is what lets agent.yaml grant MongoDB, Voyage and AWS
 # credentials to the tool sandbox alone.
 @app.tool(is_local=False)
-def search_knowledge(query: str, k: int = 8) -> str:
+def search_knowledge(query: str, k: int = 12) -> str:
     """Search the indexed corpus. Returns citations, not text.
 
     Each result is a pointer: chunk_id, source_uri, ordinal, span, metadata and
@@ -38,24 +44,27 @@ def search_knowledge(query: str, k: int = 8) -> str:
         query: Natural-language search query.
         k: How many chunks to return. Keep it small; every hit costs a read later.
     """
-    return json.dumps({"results": vector_search(query, k=k)})
+    results = vector_search(query, k=k)
+    _FOUND.update(hit["chunk_id"] for hit in results)
+    return json.dumps({"results": results})
 
 
-# Most chunks one read_spans call will read. A prompt alone did not hold the line:
-# one run read 34 chunks for one question, each a separate tool round trip. The
-# reads in one call also run concurrently, so a batch costs about one read.
-READ_LIMIT = 6
+# Most chunks one read_spans call will read: one search's worth (k defaults to 12).
+# A prompt alone did not hold the line: one run read 34 chunks for one question,
+# each a separate tool round trip. Reads in one call run concurrently.
+READ_LIMIT = 12
 
 
 @app.tool(is_local=False)
 def read_spans(chunk_ids: list[str]) -> str:
-    """Read the exact source text behind up to six chunk_ids, in one call.
+    """Read the exact source text behind up to twelve chunk_ids, in one call.
 
-    Takes only chunk_ids. Each pointer is resolved server-side and its bytes are
-    verified against the hash recorded at index time. A result whose status is
-    not "ok" carries no text: say that source is unavailable rather than
-    answering from the search result alone. chunk_ids beyond the first six come
-    back with status "skipped" and are not read.
+    Takes only chunk_ids that search_knowledge returned; any other id comes back
+    with status "not_found_by_search" and is not read. Each pointer is resolved
+    server-side and its bytes are verified against the hash recorded at index
+    time. A result whose status is not "ok" carries no text: say that source is
+    unavailable rather than answering from the search result alone. chunk_ids
+    beyond the first twelve come back with status "skipped" and are not read.
 
     Args:
         chunk_ids: chunk_ids returned by search_knowledge, used verbatim. Pass
@@ -64,7 +73,13 @@ def read_spans(chunk_ids: list[str]) -> str:
     if isinstance(chunk_ids, str):
         chunk_ids = [chunk_ids]
     ordered = list(dict.fromkeys(chunk_ids))
-    to_read, over = ordered[:READ_LIMIT], ordered[READ_LIMIT:]
+    unfound = {
+        c: {"chunk_id": c, "status": "not_found_by_search",
+            "reason": "read only chunk_ids that search_knowledge returned"}
+        for c in ordered if c not in _FOUND
+    }
+    found = [c for c in ordered if c in _FOUND]
+    to_read, over = found[:READ_LIMIT], found[READ_LIMIT:]
     with ThreadPoolExecutor(max_workers=max(1, len(to_read))) as pool:
         # Positional chunk_id only: the shim never supplies a collection or client.
         read = dict(zip(to_read, pool.map(_read_span, to_read), strict=True))
@@ -73,7 +88,8 @@ def read_spans(chunk_ids: list[str]) -> str:
             "reason": f"over the limit of {READ_LIMIT} reads per call"}
         for c in over
     }
-    return json.dumps({"results": [read[c] if c in read else skipped[c] for c in ordered]})
+    every = {**unfound, **skipped, **read}
+    return json.dumps({"results": [every[c] for c in ordered]})
 
 
 def _tools_named(*names: str) -> list[Any]:
@@ -97,11 +113,12 @@ SYSTEM_PROMPT = """\
 You answer questions about the indexed corpus, and only from what that corpus says.
 
 Work in two steps, each delegated once. First ask knowledge-retriever for
-pointers, which carry no text. Then pick the most promising chunk_ids, at most
-six, and send them to source-reader in a single task; it reads them all in one
-call. Delegate to source-reader a second time only if every read in the first
-batch came back unavailable. Answer from what those reads return, and say what
-the sources did not cover rather than reading more.
+pointers, which carry no text. Then send the most promising of the chunk_ids it
+returned, at most twelve, to source-reader in a single task; it reads them all
+in one call, and it cannot read a chunk_id the search did not return. Delegate a
+second time only if every read in the first batch came back unavailable. Answer
+from what those reads returned, and say what the sources did not cover rather
+than searching again: every extra delegation costs several model calls.
 
 Quote only text that source-reader returned with status "ok". If a read comes
 back stale, missing or unknown, say the source is unavailable and name its

@@ -141,6 +141,12 @@ override; the platform's convention keeps provider and model out of `agent.yaml`
 `LLM_PROVIDER` defaults to `anthropic` (`claude-sonnet-5`), with `openai` and `gemini` as the
 other choices, and `LLM_API_KEY` holds the key for whichever is selected.
 
+`LLM_SUBAGENT_MODEL` gives the two sub-agents a separate model; each gets its own LLM instance,
+because Agent Engine rejects a model name on a `SubAgent` and wraps each sub-agent's model
+separately. It is off by default. With `claude-haiku-4-5` for the sub-agents, the default question
+took 237 s instead of 269 s, read the same 12 chunks, and came back with less detail: the reader
+relays chunk texts to the parent and condensed them. Unset, the sub-agents use the parent's model.
+
 To route `anthropic` or `openai` through a compatible gateway, set `LLM_BASE_URL` and, if the
 gateway reads the key from its own header, `LLM_API_KEY_HEADER`. `llm.py` passes them as
 `base_url` and `default_headers`. `api.anthropic.com` is the only model host in the egress

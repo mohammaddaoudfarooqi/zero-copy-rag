@@ -135,3 +135,11 @@ def test_an_explicit_temperature_is_still_forwarded(env, fake_providers):
     env.setenv("LLM_API_KEY", "direct-key")
     llm.build_llm(temperature=0.7)
     assert fake_providers["ChatAnthropic"]["temperature"] == 0.7
+
+
+def test_an_explicit_model_wins_over_llm_model(env, fake_providers):
+    """The sub-agents ask for their own model; LLM_MODEL stays the parent's."""
+    env.setenv("LLM_API_KEY", "direct-key")
+    env.setenv("LLM_MODEL", "claude-sonnet-5")
+    llm.build_llm(model="claude-haiku-4-5")
+    assert fake_providers["ChatAnthropic"]["model_name"] == "claude-haiku-4-5"

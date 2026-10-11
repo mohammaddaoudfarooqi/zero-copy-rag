@@ -49,8 +49,11 @@ def _gateway_kwargs(provider: str, api_key: str) -> dict[str, Any]:
     return extra
 
 
-def build_llm(temperature: float | None = None) -> BaseChatModel:
+def build_llm(temperature: float | None = None, model: str | None = None) -> BaseChatModel:
     """Build the chat model named by LLM_PROVIDER, keyed by LLM_API_KEY.
+
+    ``model`` overrides LLM_MODEL for this one instance; the sub-agents use it to run
+    on a faster model than the parent.
 
     ``temperature`` is omitted from the request unless a caller passes one.
     The current frontier models reject it outright: claude-sonnet-5 answers
@@ -78,7 +81,7 @@ def build_llm(temperature: float | None = None) -> BaseChatModel:
     if not api_key:
         raise RuntimeError("LLM_API_KEY is missing; add it to .env or project secrets")
 
-    model = os.environ.get("LLM_MODEL") or _DEFAULT_MODELS[provider]
+    model = model or os.environ.get("LLM_MODEL") or _DEFAULT_MODELS[provider]
     extra = _gateway_kwargs(provider, api_key)
     if temperature is not None:
         extra["temperature"] = temperature

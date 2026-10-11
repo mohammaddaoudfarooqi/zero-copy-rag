@@ -86,7 +86,8 @@ def agent_module(monkeypatch):
 @pytest.fixture
 def built_agent(agent_module, monkeypatch):
     """Run the @app.entrypoint builder with a stubbed LLM and return deep_agent's kwargs."""
-    monkeypatch.setattr(agent_module, "build_llm", lambda temperature=0: object())
+    monkeypatch.delenv("LLM_SUBAGENT_MODEL", raising=False)
+    monkeypatch.setattr(agent_module, "build_llm", lambda temperature=None, model=None: ("llm", model))
     agent_module.build_agent()
     return agent_module.app.deep_agent_kwargs
 
@@ -261,3 +262,17 @@ def test_the_read_limit_matches_the_search_default(agent_module):
 
     k_default = inspect.signature(agent_module.search_knowledge).parameters["k"].default
     assert agent_module.READ_LIMIT == k_default
+
+
+def test_subagents_inherit_the_parent_model_by_default(built_agent):
+    assert all("model" not in s for s in built_agent["subagents"])
+
+
+def test_subagents_get_their_own_llm_instance_when_configured(agent_module, monkeypatch):
+    """Agent Engine rejects a model name string on a SubAgent: it must be an LLM instance."""
+    monkeypatch.setenv("LLM_SUBAGENT_MODEL", "claude-haiku-4-5")
+    monkeypatch.setattr(agent_module, "build_llm", lambda temperature=None, model=None: ("llm", model))
+    agent_module.build_agent()
+    kwargs = agent_module.app.deep_agent_kwargs
+    assert kwargs["llm"] == ("llm", None)
+    assert [s["model"] for s in kwargs["subagents"]] == [("llm", "claude-haiku-4-5")] * 2

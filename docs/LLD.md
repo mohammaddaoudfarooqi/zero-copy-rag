@@ -711,6 +711,7 @@ The hosted agent reads five more variables from its environment, not from `pipel
 | `LLM_API_KEY`  | (none)             | Key for the selected provider or gateway                                    |
 | `LLM_BASE_URL` | (none)             | Anthropic- or OpenAI-compatible gateway URL; blank calls the provider       |
 | `LLM_API_KEY_HEADER` | (none)       | Extra header that carries `LLM_API_KEY`, for gateways that need one         |
+| `LLM_SUBAGENT_MODEL` | (none)       | Model for the two sub-agents; unset, they use the parent's model            |
 
 ---
 

@@ -674,6 +674,8 @@ All settings live in `.env` (loaded by `pipeline/config.py` via Pydantic Setting
 | `TEMPORAL_ADDRESS`        | `localhost:7233`          | Temporal server address                           |
 | `TEMPORAL_NAMESPACE`      | `default`                 | Temporal namespace                                |
 | `TEMPORAL_TASK_QUEUE`     | `temporal-pipeline`        | Worker task queue                                 |
+| `TEMPORAL_API_KEY`        | (none)                    | Temporal Cloud API key (enables TLS)              |
+| `TEMPORAL_TLS_CERT` / `TEMPORAL_TLS_KEY` | (none)     | Client cert and key paths for Temporal Cloud mTLS; set both or neither |
 | `AWS_REGION`              | `us-east-1`               | AWS region for the S3 client                      |
 | `AWS_ACCESS_KEY_ID`       | (none)                    | Explicit creds (blank falls back to boto3's chain) |
 | `AWS_SECRET_ACCESS_KEY`   | (none)                    | Explicit creds (blank falls back to boto3's chain) |

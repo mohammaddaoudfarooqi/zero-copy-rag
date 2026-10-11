@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     temporal_address: str = "localhost:7233"
     temporal_namespace: str = "default"
     temporal_task_queue: str = "temporal-pipeline"
+    # Temporal Cloud authentication: set an API key, or both mTLS paths, never both.
+    # All blank connects without TLS, for a local or self-hosted server.
+    temporal_api_key: str = ""
+    temporal_tls_cert: str = ""  # path to the client certificate (PEM)
+    temporal_tls_key: str = ""   # path to the client private key (PEM)
 
     # ---- MongoDB Atlas ----
     mongodb_uri: str = ""

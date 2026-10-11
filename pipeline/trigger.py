@@ -8,19 +8,45 @@ index is updated in place rather than duplicated.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from typing import Any
 
 from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy
+from temporalio.service import TLSConfig
 
-from .config import settings
+from .config import Settings, settings
 from .models import S3Ref, doc_id_for_uri
 from .s3util import refs_from_s3_event
 
 INGEST_WORKFLOW = "IngestWorkflow"  # referenced by name to avoid importing workflow deps
 
 
+def connect_options(s: Settings) -> dict[str, Any]:
+    """Keyword arguments for Client.connect beyond the target address.
+
+    Blank credentials connect without TLS (a local or self-hosted server). For Temporal
+    Cloud set TEMPORAL_API_KEY, which temporalio pairs with TLS by itself, or both
+    TEMPORAL_TLS_CERT and TEMPORAL_TLS_KEY for mTLS.
+    """
+    opts: dict[str, Any] = {"namespace": s.temporal_namespace}
+    cert, key = s.temporal_tls_cert.strip(), s.temporal_tls_key.strip()
+    if bool(cert) != bool(key):
+        raise ValueError("mTLS needs both TEMPORAL_TLS_CERT and TEMPORAL_TLS_KEY")
+    if cert and s.temporal_api_key:
+        raise ValueError("set either TEMPORAL_API_KEY or the TEMPORAL_TLS_* pair, not both")
+    if s.temporal_api_key:
+        opts["api_key"] = s.temporal_api_key
+    if cert:
+        opts["tls"] = TLSConfig(
+            client_cert=Path(cert).read_bytes(), client_private_key=Path(key).read_bytes()
+        )
+    return opts
+
+
 async def get_client() -> Client:
-    return await Client.connect(settings.temporal_address, namespace=settings.temporal_namespace)
+    """The one way this repo connects to Temporal: worker, Lambda and seed scripts."""
+    return await Client.connect(settings.temporal_address, **connect_options(settings))
 
 
 async def handle_s3_event(client: Client, event: dict | str | bytes) -> list[str]:

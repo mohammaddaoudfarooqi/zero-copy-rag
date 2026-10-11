@@ -334,8 +334,8 @@ from it. The eval runs the agent's retrieval for each question, reads the hits b
 the phrases each question missed. It needs Atlas, Voyage and the bucket, so it is not part of CI;
 `tests/test_eval_retrieval.py` checks the scoring and that every phrase exists in the document.
 
-On the seed document, with chunks embedded under their heading path: 89% recall at k=12, 95% at
-k=14 and 100% from k=16, which is why the agent reads up to 16. Before heading context the same
+On the seed document, with chunks embedded under their heading path and no duplicate tail
+windows: 95% recall at k=12 and 100% from k=16, which is why the agent reads up to 16. Before heading context the same
 cases scored 79% at k=12 and 84% at k=24, all misses being the phase headings of the
 implementation-stages question.
 

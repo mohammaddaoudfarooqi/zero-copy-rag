@@ -12,10 +12,9 @@ against a SHA-256 taken at index time, whenever the agent cites it.
 
 ## What is Temporal?
 
-[Temporal](https://temporal.io) is a **durable execution platform**. It orchestrates long-running
-workflows as code, with automatic retries, checkpointing, and resume-on-failure built in. You
-write plain Python functions; Temporal ensures they run to completion even across crashes, deploys,
-or network partitions.
+[Temporal](https://temporal.io) is a **durable execution platform**. You write workflows as
+plain Python functions, and Temporal records each step, retries the ones that fail and resumes
+the rest after a crash or a deploy.
 
 In this architecture Temporal owns ingestion:
 
@@ -47,8 +46,8 @@ what it produces.
 
 **How to read the diagram below:**
 
-1. Changes in **data sources** (S3, RDBMS, messaging technologies, etc.) directly
-   launch workflows running in Temporal.
+1. An object landing in **S3** starts a workflow in Temporal directly. S3 is the only source
+   today; other sources would plug in at the same trigger (LLD section 13).
 2. **Temporal** chunks the content, calls **Voyage AI** for embeddings, and upserts a pointer
    plus its embedding into **Atlas Vector Search**. The chunk text is never stored.
 3. A **hosted deep agent**, deployed separately on **MongoDB Atlas Agent Engine**, answers
@@ -77,24 +76,24 @@ flowchart LR
 | Orchestration, retries, checkpointing, resumability           | **Temporal**              |
 | Vector index, pointers, active-collection pointer             | **MongoDB Atlas**         |
 | Embeddings                                                    | **MongoDB Voyage AI**     |
-| Agent reasoning & answers                                     | **Atlas Agent Engine**    |
+| Agent runtime, sandboxing, egress policy                      | **Atlas Agent Engine**    |
+| Model calls (Anthropic by default)                            | **LLM provider**          |
 
 ---
 
 ## Atlas data model
 
 ```text
-Database: temporal
+Database: temporal (MONGODB_DB)
 ├── chunks_staging       ← intermediate chunks (spans, not text) during IngestWorkflow
 ├── knowledge_zc         ← embeddings + source pointers, Atlas Vector Search index (active), no text
 ├── knowledge_v2         ← second collection for a model change (re-ingest, then cutover)
 └── temporal_config      ← active collection/index pointer (flipped by cutover)
 ```
 
-Retrieval reads the same database the pipeline writes, so there is no second copy and no sync
-lag between them. Document text never lands here; it
-is resolved from the source object at query time. See [docs/LLD.md](docs/LLD.md) sections 3 and 8
-for the pointer contract and the collection schemas.
+Retrieval reads the same database the pipeline writes, so there is no sync lag between them.
+Document text never lands here; it is read from the source object at query time. The pointer
+contract and the collection schemas are in [docs/LLD.md](docs/LLD.md) sections 3 and 8.
 
 ---
 
@@ -103,13 +102,14 @@ for the pointer contract and the collection schemas.
 Ingestion turns objects landing in storage into embedded, searchable knowledge, durably and
 **without a message broker**. An S3 **ObjectCreated** event starts a Temporal `IngestWorkflow`
 directly: an AWS Lambda in production, through the shared `handle_s3_event`. Locally,
-`make seed` uploads the object and starts the same workflow itself. The moment `start_workflow` returns, the change is safe: Temporal runs the
-workflow to completion across retries, worker restarts, and infra maintenance.
+`make seed` uploads the object and starts the same workflow itself. Once `start_workflow`
+returns, the change is safe: Temporal runs the workflow to completion across retries and worker
+restarts.
 
 - **Trigger goes directly to Temporal.** Temporal's durable execution provides the "don't lose the
   event" guarantee; the trigger is a thin adapter (`pipeline/lambda_handler.py`).
-- **Idempotent, update-in-place.** A content-hash check skips re-embedding unchanged objects; an
-  edited object re-embeds and upserts in place (see the two-hashes note below).
+- **Idempotent, update-in-place.** A whole-object hash skips unchanged uploads. An edited object
+  re-embeds and upserts in place, and chunks the new version no longer has are pruned.
 - **Batched & scale-out.** Chunks embed in batches of 32, one ranged read and one Voyage call per
   batch; documents ingest concurrently, and more worker processes on the same task queue scale
   it horizontally.
@@ -159,9 +159,8 @@ A document that yields zero chunks (empty, unsupported or not valid UTF-8) goes 
 
 ## The query plane
 
-This is a two-plane architecture. Ingestion runs on Temporal, as described above. The query
-agent is a separate deployment: a deep agent on **MongoDB Atlas Agent Engine**
-(`mongodb_agent_engine/`), with two sub-agents split by capability:
+The query agent is deployed separately from ingestion: a deep agent on **MongoDB Atlas Agent
+Engine** (`mongodb_agent_engine/`), with two sub-agents split by capability:
 
 - **`knowledge-retriever`** searches the vector index and returns pointers (chunk id, source URI,
   span, score), never text.
@@ -184,7 +183,8 @@ AWS credentials. Egress is deny-all apart from four named hosts in `agent.yaml`.
 lives only in the object store; the searchable collection never stores it. See
 [docs/LLD.md](docs/LLD.md) section 11 for the deployed topology and what is and is not
 enforced, and [mongodb_agent_engine/README.md](mongodb_agent_engine/README.md) for the SDK and
-deployment details.
+deployment details. Atlas Agent Engine is in Public Preview, which MongoDB does not recommend for
+production workloads.
 
 ---
 
@@ -206,7 +206,7 @@ cp .env.example .env
 # 3. Install Python dependencies
 make setup
 
-# 4. Start Temporal, the worker and the trigger API
+# 4. Start the Temporal dev server and the worker
 make start
 
 # 5. Create the Atlas Vector Search index (one-time)
@@ -233,7 +233,7 @@ targets.
 | Service         | URL                   | Notes                                              |
 | --------------- | --------------------- | -------------------------------------------------- |
 | Temporal Web UI | http://localhost:8233 | watch `IngestWorkflow` runs                        |
-| Playground      | http://localhost:3000 | local Agent Engine stack (`make playground`)       |
+| Playground      | http://localhost:3000 | `make playground`; `dev up` prints another port if 3000 is taken |
 
 ---
 
@@ -242,6 +242,7 @@ targets.
 ```text
 zero-copy-rag/
 ├── README.md
+├── LICENSE                         ← Apache-2.0 (not covering seed/)
 ├── Makefile                        ← all dev commands (make help)
 ├── pyproject.toml                  ← Python deps managed by uv
 ├── uv.toml                         ← uv resolver settings
@@ -275,8 +276,7 @@ zero-copy-rag/
 └── docs/
     ├── RUNBOOK.md                  ← developer setup guide
     ├── LLD.md                      ← low-level design
-    ├── decisions/                  ← Architecture Decision Records
-    └── images/                     ← architecture diagrams
+    └── decisions/                  ← Architecture Decision Records
 ```
 
 ---

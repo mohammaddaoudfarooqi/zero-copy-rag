@@ -1,11 +1,10 @@
 # Runbook: Developer Setup Guide
 
-Everything a new developer needs to spin up this repo locally and understand the production
-cloud setup.
+How to run zero-copy-rag on your machine, and what changes for a production deployment.
 
-Everything runs on your machine except storage. The Temporal dev server, the worker, the
-trigger API and the Agent Engine Playground are local processes; the documents live in a real
-S3 bucket and the index lives in Atlas. The bucket has to be real because the agent's
+Everything runs on your machine except storage. The Temporal dev server, the worker and the
+Agent Engine Playground are local processes; the documents live in a real S3 bucket and the
+index lives in Atlas. The bucket has to be real because the agent's
 `read_span` tool reads it from behind an egress proxy that only admits the hosts named in
 `agent.yaml` (section 5).
 
@@ -47,7 +46,7 @@ Install these tools before running anything:
 | **uv**             | latest  | `curl -LsSf https://astral.sh/uv/install.sh \| sh` (docs: [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/)) |
 | **Docker Desktop** | >= 4.x  | [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/), for the local Playground         |
 | **Temporal CLI**   | latest  | `brew install temporal` or [docs.temporal.io/cli](https://docs.temporal.io/cli)                                      |
-| **agentengine**    | latest  | The Atlas Agent Engine CLI, for the local Playground and for deploying (section 10)                                  |
+| **agentengine**    | latest  | [Install & authenticate](https://www.mongodb.com/docs/agentengine/build/install-authenticate/), for the local Playground and for deploying (section 10) |
 | **mongosh**        | latest  | `brew install mongosh`, optional, handy for inspecting Atlas collections                                             |
 
 Verify:
@@ -78,8 +77,7 @@ agentengine --version
 
 ### Allow network access
 
-The worker, the trigger API and the local Playground's Tool Pod all reach Atlas from your
-machine's public IP. You need to allow:
+The worker and the local Playground's Tool Pod both reach Atlas from your machine's public IP. You need to allow:
 
 - Your **local machine IP**, or **0.0.0.0/0** temporarily while testing.
 - The **Atlas Agent Engine data-plane ranges**, if you deploy the query agent (section 10).
@@ -109,7 +107,7 @@ required.
 
 1. In the Atlas UI go to **Services -> Atlas Models** (or search "Models" in the left nav).
 2. Select **Voyage AI** from the provider list and click **Generate API Key**.
-3. Copy the key, it will only be shown once.
+3. Copy the key. It is shown only once.
 4. The default model used is `voyage-3.5` (1024 dimensions).
 5. Docs: [Atlas Models: Voyage AI](https://www.mongodb.com/docs/atlas/ai-integrations/)
 
@@ -178,11 +176,10 @@ separate deployment (`mongodb_agent_engine/`, see
 Run the test suite with:
 
 ```bash
-uv run --no-sync pytest
+uv run pytest
 ```
 
-`--no-sync` matters: a plain `uv run` re-syncs the environment and tries to install the SDK
-placeholders. The suite needs no network, Atlas or AWS access.
+The suite needs no network, Atlas or AWS access.
 
 ---
 
@@ -199,7 +196,7 @@ The Tool Pod's egress is deny-all. Locally and hosted alike, its proxy admits on
 - **Use `temporal-agentic` in `us-east-1`**, which is what `.env.example` sets, and every host
   is already allowed.
 - **Or use your own bucket** and add its virtual-host name first:
-  `agentengine agent egress add <bucket>.s3.<region>.amazonaws.com:443`. Until you do, every
+  `agentengine agent egress add --component tool <bucket>.s3.<region>.amazonaws.com:443`. Until you do, every
   `read_span` fails and the agent reports each source as unavailable. `tests/test_egress.py`
   pins the allow-listed bucket, so update `ALLOW_LISTED_BUCKET` there as well.
 
@@ -254,9 +251,9 @@ Docs: [Atlas Vector Search](https://www.mongodb.com/docs/atlas/atlas-vector-sear
 ### Seed a document
 
 ```bash
-make seed                                          # uploads a short built-in sample
-make seed FILE=./seed/ethical_governance.md        # upload a real document
-make seed FILE=./my-doc.md KEY=docs/my-doc.md      # choose the S3 key
+make seed                                          # uploads seed/ethical_governance.md
+make seed FILE=./my-doc.md                         # upload your own Markdown file
+make seed FILE=./my-doc.md KEY=docs/my-doc.md      # and choose its S3 key
 ```
 
 `make seed` uploads the file to `S3_BUCKET` and then starts its `IngestWorkflow`, printing the
@@ -280,7 +277,8 @@ make playground
 ```
 
 This runs `agentengine dev up` from the repository root, which builds and starts the agent's
-local stack in Docker and serves the Playground on [http://localhost:3000](http://localhost:3000).
+local stack in Docker and serves the Playground on [http://localhost:3000](http://localhost:3000),
+or on the next free port it prints if 3000 is taken.
 Ask it about the document you seeded. Its tools query the same Atlas collection and read the
 same bucket the worker just indexed. Section 10 covers what the stack runs and how to post to it
 without the Playground.
@@ -293,8 +291,8 @@ make stop-app       # stops app processes only (leaves Temporal running)
 make restart-app    # restart app processes after .env changes
 ```
 
-`make stop` does not touch the Playground. It runs in the foreground, so stop it with Ctrl-C in
-its terminal, or `agentengine dev stop` from another.
+`make stop` does not touch the Playground. `agentengine dev up` returns once the stack is up and
+leaves it running in Docker; stop it with `agentengine dev stop`.
 
 ---
 
@@ -313,9 +311,12 @@ then resolves each `chunk_id` through `pipeline.spanio.read_span` to get the sni
 A hit whose read comes back `stale`, `missing` or `unknown` prints its status instead of text,
 which is the same contract the agent works under.
 
-In Atlas, confirm:
+In Atlas, confirm that `knowledge_zc` in your `MONGODB_DB` holds pointer and embedding
+documents and that none has a `text` field. In mongosh:
 
-- `temporal.knowledge_zc` has pointer + embedding documents (no `text` field).
+```js
+db.knowledge_zc.countDocuments({ text: { $exists: true } })   // 0
+```
 
 `tests/test_no_text_invariant.py` and `tests/test_index_pointers.py` pin that invariant, so a
 `text` field appearing in that collection means something bypassed the write path.
@@ -363,8 +364,11 @@ With the notification in place, seed with `NO_TRIGGER=1` so the upload is the on
 
 - Handler entrypoint: `pipeline.lambda_handler.lambda_handler`; package `pipeline/` with the
   `temporalio` dependency.
-- Give the Lambda network egress to your Temporal service and set `TEMPORAL_ADDRESS` /
-  `TEMPORAL_NAMESPACE` (plus mTLS cert paths for Temporal Cloud) via environment.
+- Give the Lambda network egress to your Temporal service and set `TEMPORAL_ADDRESS` and
+  `TEMPORAL_NAMESPACE` in its environment. The client in `pipeline/trigger.py` connects without
+  TLS, which suits a self-hosted Temporal service inside your network. Temporal Cloud needs mTLS
+  or an API key, and this repo does not configure either yet: add it to `get_client()` in
+  `pipeline/trigger.py` and to the worker before pointing them at Temporal Cloud.
 - Wire the bucket's `s3:ObjectCreated:*` notifications to the Lambda (S3 console or IaC).
 
 ---
@@ -406,8 +410,9 @@ curl -X POST http://localhost:<oe-port>/invoke \
   -d '{"message": "your question here"}'
 ```
 
-A full retrieve-then-read run takes tens of seconds, because the agent reads several spans
-before answering. Give curl a generous `-m` or it will time out on a run that is working.
+A full run can take minutes, because the agent reads many spans before answering: one local run
+made 35 tool calls and took about 7 minutes. Give curl a generous `-m`, or it will time out on a
+run that is still working.
 
 Two things to know when a run misbehaves:
 
@@ -428,26 +433,19 @@ repository root:
 2. Set the deployed secrets. They are separate from `.env` and never read from it. To import
    keys without putting values on the command line, pipe them in:
    `grep -E '^(MONGODB_URI|MONGODB_DB|VOYAGE_API_KEY|LLM_API_KEY|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)=' .env | agentengine secret set --from-file -`
+   (add `LLM_BASE_URL` and `LLM_API_KEY_HEADER` to the pattern when using a gateway).
 3. Add the data-plane IP ranges to the Atlas access list (`agentengine atlas setup-ip-access`).
 4. `agentengine build`, then `agentengine deploy`.
 5. `agentengine invoke "your question here"` sends a question to the deployed agent.
 
 ### Where the boundary actually is
 
-`read_span` takes only a `chunk_id`; the pointer is resolved server-side and the bytes are
-verified against the hash recorded at index time. That is a real Python-level guarantee: no
-caller, model or otherwise, can name an arbitrary bucket, key or byte range. The wiring contract
-is pinned by `tests/test_agent_wiring.py`.
-
-The sub-agent split is weaker, and worth being honest about. The parent agent is built with
-`tools=[]` so it has to delegate, and the observed runs do retrieve before they read. But
-nothing in this codebase enforces which tool a sub-agent may call: both sub-agents run in the
-same Tool Pod under one set of credentials. The split is a declared contract that the platform
-honours, not one this repo can enforce.
-
-The capability boundary that does bite is egress. `agent.yaml` is deny-all plus four named
-FQDNs, and the Tool Pod's proxy answers CONNECT to anything else with 403. `tests/test_egress.py`
-guards it from the code side.
+Two limits hold. `read_span` takes only a `chunk_id`, so no caller can name a bucket, key or
+byte range (`tests/test_agent_wiring.py`). Egress is deny-all plus four named hosts, and the
+proxy answers `CONNECT` to anything else with 403 (`tests/test_egress.py`). The sub-agent split
+does not hold in the same way: both sub-agents share one tool sandbox and its credentials, and
+nothing enforces which tool each may call. The full account is in
+[mongodb_agent_engine/README.md](../mongodb_agent_engine/README.md#what-the-capability-split-does-and-does-not-enforce).
 
 ---
 
@@ -482,8 +480,9 @@ is what makes ingestion automatic. Until that exists, `make seed` starts each in
 | Temporal Cloud        | [temporal.io/cloud](https://temporal.io/cloud)                                   |
 | Self-hosted with Helm | [docs.temporal.io/self-hosted-guide](https://docs.temporal.io/self-hosted-guide) |
 
-Update `TEMPORAL_ADDRESS` in `.env` to the Temporal Cloud endpoint. Add mTLS cert paths for
-Temporal Cloud connections.
+Pointing `TEMPORAL_ADDRESS` at Temporal Cloud is not enough on its own: the worker and
+`pipeline/trigger.py` connect without TLS, and Temporal Cloud requires mTLS or an API key. That
+connection code does not exist in this repo yet (section 9).
 
 ### Voyage AI (via MongoDB Atlas Models)
 
@@ -491,4 +490,4 @@ Temporal Cloud connections.
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Atlas Models overview         | [mongodb.com/docs/atlas/ai-integrations](https://www.mongodb.com/docs/atlas/ai-integrations/)                                                             |
 | Voyage AI embeddings on Atlas | [mongodb.com/docs/atlas/atlas-vector-search/ai-integrations/voyage-ai](https://www.mongodb.com/docs/atlas/atlas-vector-search/ai-integrations/voyage-ai/) |
-| Available embedding models    | [mongodb.com/docs/atlas/ai-integrations/voyage-ai/models](https://www.mongodb.com/docs/atlas/ai-integrations/)                                            |
+| Available embedding models    | [mongodb.com/docs/atlas/ai-integrations](https://www.mongodb.com/docs/atlas/ai-integrations/)                                                             |

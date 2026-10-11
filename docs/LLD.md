@@ -34,11 +34,11 @@ two services:
 
 | Layer               | Service       | Role                                                                              |
 | -------------------- | -------------- | ---------------------------------------------------------------------------------- |
-| Orchestration       | Temporal      | Ingestion (stage spans, embed, index) as three activities, durable and resumable |
+| Orchestration       | Temporal      | Ingestion (stage spans, embed, index, or clear) as activities, durable and resumable |
 | Storage + retrieval | MongoDB Atlas | Single store for staged pointers, indexed pointers, vector search                |
 
-Embeddings are provided by **Voyage AI (MongoDB AI)**. There is no reranking step; reranking was
-dropped from the design entirely.
+Embeddings are provided by **Voyage AI (MongoDB AI)**. Retrieval is vector search only, with no
+reranking step.
 
 The searchable collection (`knowledge_zc`) never stores chunk text. Every document there carries
 an embedding plus a pointer into the source S3 object (bucket, key, etag, a byte span, and a
@@ -69,7 +69,7 @@ pipeline/
 ├── worker.py               <- Temporal worker (hosts ingestion workflows/activities)
 ├── config.py               <- Pydantic settings (env-driven, lru_cache singleton)
 ├── models.py               <- S3Ref, Span, doc_id_for_uri, sha256_hex
-├── clients.py               <- lazy clients: Mongo, Voyage, S3, SQS, cached per credential
+├── clients.py               <- lazy clients: Mongo, Voyage, S3, cached per credential
 ├── trigger.py                <- shared trigger core: handle_s3_event + start_ingest
 ├── lambda_handler.py           <- AWS Lambda entrypoint for real S3 (same handle_s3_event core)
 ├── s3util.py                    <- parse an S3 ObjectCreated event (direct, SQS or SNS) into list[S3Ref]
@@ -100,10 +100,6 @@ agent.yaml                  <- Agent Engine manifest: entrypoint, sandbox secret
 dev.yaml                    <- local `agentengine dev up` settings only
 .agentengineignore          <- narrows the source archive `agentengine build` uploads
 ```
-
-The old OpenAI Agents SDK agent (an `agent/` directory: `DeepResearchAgent`, `vector_search_tool`,
-`rerank_tool`, and its React UI) has been deleted. `mongodb_agent_engine/` is its
-replacement query plane, described in section 11.
 
 ---
 
@@ -159,13 +155,8 @@ def sha256_hex(data: bytes | str) -> str:
 `fetch_and_stage_chunks` short-circuits if `knowledge_zc` already contains a doc with the same
 `doc_id` and `doc_content_hash`: identical bytes at the same key are never re-embedded.
 
-### Dead contracts still in `models.py`
-
-`Chunk`, `ChunkResult`, and `EmbeddedChunk` are dataclasses left over from before the
-conversion to pointer-only storage. Nothing in the current codebase imports them; the actual
-staged and indexed records are plain dicts built directly in `pipeline/activities/ingest.py` (see
-section 8). They are noted here rather than deleted from this document because they are real,
-present code, not because they describe the live data path.
+The staged and indexed records themselves are plain dicts built in
+`pipeline/activities/ingest.py` (section 8).
 
 ---
 
@@ -353,8 +344,8 @@ The extractor factory decouples file-type handling from the workflow, but every 
 satisfy a stronger constraint than "produce some chunks": the base class enforces that
 `body[span.start:span.end].decode("utf-8")` equals exactly the chunk text the extractor produced,
 because that byte span is the only thing ever stored. An extractor that transforms or renders
-text (PDF text extraction, CSV rows rendered as `key: value` records) cannot satisfy this and is
-deferred rather than wired in with a lossy approximation.
+text (PDF text extraction, CSV rows rendered as `key: value` records) cannot satisfy this, so
+those formats are refused rather than indexed with a lossy approximation.
 
 ### Base class
 
@@ -541,11 +532,11 @@ Same parsing, same `start_ingest`, same durability guarantee. Deploy notes are i
 
 ## 11. Query plane (hosted deep agent)
 
-The old OpenAI Agents SDK agent (`agent/`: `DeepResearchAgent`, `vector_search_tool`,
-`rerank_tool`, and a bundled React UI) is gone. It is replaced by `mongodb_agent_engine/`, a deep
-agent deployed on MongoDB Atlas Agent Engine. This is a separate deployment from the local
-ingestion stack: nothing in `Makefile` starts it. It is built and deployed with the
-`agentengine` CLI from the repository root, which is the agent workspace (`agent.yaml`).
+`mongodb_agent_engine/` is a deep agent deployed on MongoDB Atlas Agent Engine. It is a separate
+deployment from the ingestion stack: `make start` does not run it. The `agentengine` CLI runs it
+locally (`make playground`) and builds and deploys it, always from the repository root, which is
+the agent workspace (`agent.yaml`). Atlas Agent Engine is in Public Preview, which MongoDB does
+not recommend for production workloads.
 
 ```mermaid
 flowchart LR
@@ -649,8 +640,7 @@ pipeline = [
 ```
 
 The query is embedded with the **active** model from `temporal_config` (so it matches the
-collection's vector space after a cutover). The projection has no `text` key; there is nothing to
-remove, because nothing was ever put there.
+collection's vector space after a cutover). The projection has no `text` key.
 
 ---
 
@@ -691,10 +681,6 @@ The hosted agent reads five more variables from its environment, not from `pipel
 | `LLM_BASE_URL` | (none)             | Anthropic- or OpenAI-compatible gateway URL; blank calls the provider       |
 | `LLM_API_KEY_HEADER` | (none)       | Extra header that carries `LLM_API_KEY`, for gateways that need one         |
 
-Settings removed with the old agent: `openai_api_key`, `agent_model`, `agent_max_turns`,
-`agent_api_port`, `voyage_rerank_model`. `trigger_api_port` went with the HTTP trigger, which had no
-remaining caller.
-
 ---
 
 ## 13. Scaling to multiple data sources
@@ -725,9 +711,9 @@ There is no `sources` collection, no sink connector, and no change-stream watche
 - **Other object stores / SQS-driven S3:** `refs_from_s3_event` already unwraps SQS and SNS
   bodies, so a queue consumer only has to hand each message to `handle_s3_event`. No consumer
   ships in this repo.
-- **RDBMS / CDC (Debezium, etc.):** a small consumer receives change events and calls
-  `start_ingest`. For inline row content, extend the contract with a payload and branch in
-  `fetch_and_stage_chunks`, keeping in mind the byte-reproducibility constraint from section 7.
+- **RDBMS / CDC (Debezium, etc.):** a small consumer receives change events, writes the content
+  to S3 and calls `start_ingest`. Content that never lands in an object cannot be zero-copy,
+  because `read_span` would have nothing to read.
 - **Existing Atlas data (change stream):** an Atlas trigger or a watcher process calls
   `start_ingest` per change.
 - **Webhook / HTTP (Notion, GitHub, etc.):** a small authenticated HTTP handler (none ships here)
@@ -741,8 +727,8 @@ Per-worker concurrency is `ThreadPoolExecutor(max_workers=16)`, tune to the embe
 limit.
 
 ```bash
-uv run python -m pipeline.worker &   # worker 1
-uv run python -m pipeline.worker &   # worker N
+uv run --no-sync python -m pipeline.worker &   # worker 1
+uv run --no-sync python -m pipeline.worker &   # worker N
 ```
 
 ---
@@ -768,16 +754,10 @@ everything else is refused (section 7).
 
 | Extractor           | Status    | `ranges()` behavior                                          |
 | --------------------- | ----------- | ---------------------------------------------------------------- |
-| `MarkdownExtractor` | Supported | Splits on `#`/`##`/`###` headings; window-splits long sections |
+| `MarkdownExtractor` | Supported | Splits on `#` to `######` headings; window-splits long sections |
 
-### Chunking parameter tuning (once/if a format is un-deferred)
-
-| Use case                             | `CHUNK_SIZE` | `CHUNK_OVERLAP`                 |
-| -------------------------------------- | -------------- | ---------------------------------- |
-| Long narrative docs (markdown)       | 1200         | 150                             |
-| Short structured records (CSV, JSON) | 512          | 64                              |
-| Code files                           | 800          | 200 (preserve function context) |
-| IoT telemetry batches                | 400          | 0 (batches are atomic)          |
+The defaults (`CHUNK_SIZE=1200`, `CHUNK_OVERLAP=150`) suit long narrative Markdown. Shorter
+chunks give more precise hits at the cost of more pointers and more span reads per answer.
 
 ---
 
@@ -803,7 +783,14 @@ The content-hash check in `fetch_and_stage_chunks` gives built-in incremental sy
 
 - Same key, same content: `status: "unchanged"`, returns immediately, no embedding call.
 - Same key, new content: re-embed; `index_document` updates in place and prunes stale chunks.
+  Until it finishes, reads of the old chunks return `stale`, because the ETag changed.
+- Same key, now unsupported or empty: `clear_document` removes its chunks.
 - New key: full ingest.
+
+A deleted object is the one change this does not catch: only ObjectCreated events start an
+ingest, so the deleted object's chunks stay searchable and `read_span` reports them `missing`.
+Handling ObjectRemoved events with `clear_document`, or the reconciliation sweep below, would
+close that gap. Neither is implemented.
 
 ### Scheduled reconciliation / full re-sync
 

@@ -241,3 +241,47 @@ def test_read_span_degrades_on_a_wrongly_typed_pointer(mutate, why):
     assert out["status"] != "ok", why
     assert "text" not in out, why
     assert s3.calls == [], f"{why}: rejected pointers must not spend a GetObject"
+
+
+TITLE_SPAN = {"start": 2, "end": 7}  # "Title"
+
+
+def _doc_with_path(path):
+    doc = _doc()
+    doc["metadata"] = {"heading_path": path}
+    return doc
+
+
+def test_an_ok_read_carries_its_heading_context(monkeypatch):
+    spanio._HEADING_CACHE.clear()
+    out = spanio.read_span("d:0", collection=_FakeColl(_doc_with_path([TITLE_SPAN])), client=_FakeS3())
+    assert out["status"] == "ok"
+    assert out["text"] == SEGMENT
+    assert out["context"] == "Title"
+
+
+def test_a_read_without_a_heading_path_has_no_context():
+    out = spanio.read_span("d:0", collection=_FakeColl(_doc()), client=_FakeS3())
+    assert out["status"] == "ok" and "context" not in out
+
+
+def test_a_malformed_heading_path_is_dropped_not_fatal():
+    out = spanio.read_span("d:0", collection=_FakeColl(_doc_with_path([{"start": "2", "end": 7}])),
+                           client=_FakeS3())
+    assert out["status"] == "ok" and "context" not in out
+
+
+def test_heading_texts_are_cached_per_object_version():
+    spanio._HEADING_CACHE.clear()
+    s3 = _FakeS3()
+    real = spanio.s3_client
+    spanio.s3_client = lambda: s3
+    try:
+        for _ in range(3):
+            assert spanio.heading_texts("b", "k.md", "etag1", [TITLE_SPAN]) == ["Title"]
+        assert len(s3.calls) == 1
+        spanio.heading_texts("b", "k.md", "etag2", [TITLE_SPAN])
+        assert len(s3.calls) == 2, "a new ETag is a new object version and is read again"
+    finally:
+        spanio.s3_client = real
+        spanio._HEADING_CACHE.clear()

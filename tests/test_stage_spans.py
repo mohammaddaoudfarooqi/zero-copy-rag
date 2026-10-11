@@ -239,7 +239,27 @@ def test_embed_batch_texts_match_the_staged_hashes(wired):
     _run(ing.embed_staged_batch, doc_id, list(range(n)), None)
     sent = voy.batches[0]
     for d, text in zip(sorted(staging.docs, key=lambda x: x["ordinal"]), sent, strict=True):
-        assert hashlib.sha256(text.encode("utf-8")).hexdigest() == d["content_hash"]
+        segment = BODY[d["span"]["start"]:d["span"]["end"]].decode("utf-8")
+        assert hashlib.sha256(segment.encode("utf-8")).hexdigest() == d["content_hash"]
+        # The embedded text is the heading path, then the verified chunk bytes.
+        assert text.endswith(segment)
+
+
+def test_embed_batch_prefixes_the_heading_path(wired):
+    staging, *_, voy = wired
+    n = ing.fetch_and_stage_chunks(REF)["n"]
+    _run(ing.embed_staged_batch, staging.docs[0]["doc_id"], list(range(n)), None)
+    for d, text in zip(sorted(staging.docs, key=lambda x: x["ordinal"]), voy.batches[0], strict=True):
+        titles = [BODY[s["start"]:s["end"]].decode() for s in d["metadata"].get("heading_path", [])]
+        if titles:
+            assert text.startswith(" > ".join(titles) + "\n\n")
+
+
+def test_embed_batch_records_the_embed_version(wired):
+    staging, *_ = wired
+    n = ing.fetch_and_stage_chunks(REF)["n"]
+    _run(ing.embed_staged_batch, staging.docs[0]["doc_id"], list(range(n)), None)
+    assert all(op._doc["$set"]["embed_version"] == ing.EMBED_VERSION for op in staging.bulk)
 
 
 def test_embed_batch_refuses_a_span_that_does_not_verify(wired):
@@ -360,7 +380,7 @@ def test_an_unchanged_document_is_not_restaged(wired, monkeypatch):
     staging, know, _, voy = wired
     doc_id = doc_id_for_uri(REF.s3_uri)
     know.docs.append({"doc_id": doc_id, "chunk_id": f"{doc_id}:0",
-                      "doc_content_hash": _doc_hash()})
+                      "doc_content_hash": _doc_hash(), "embed_version": ing.EMBED_VERSION})
 
     extracted = []
     real_get_extractor = ing.get_extractor
@@ -454,3 +474,13 @@ def test_embed_batch_refuses_a_short_embedding_response(wired, monkeypatch):
 
     assert staging.bulk == [], "a short response must not leave a partial write behind"
     assert [d["status"] for d in staging.docs] == ["pending"] * n
+
+
+def test_a_document_embedded_under_an_older_recipe_is_restaged(wired):
+    """Same bytes, older embed_version: the vectors are stale, so re-embed."""
+    _staging, know, *_ = wired
+    doc_id = doc_id_for_uri(REF.s3_uri)
+    know.docs.append({"doc_id": doc_id, "chunk_id": f"{doc_id}:0",
+                      "doc_content_hash": _doc_hash(), "embed_version": ing.EMBED_VERSION - 1})
+    out = ing.fetch_and_stage_chunks(REF)
+    assert out["status"] == "staged"

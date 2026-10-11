@@ -13,6 +13,7 @@ from pipeline.config import settings
 POINTER_KEYS = {
     "doc_id", "chunk_id", "ordinal", "span", "content_hash", "doc_content_hash",
     "embedding", "model", "dim", "source_uri", "bucket", "key", "etag", "metadata",
+    "embed_version",
 }
 
 # `metadata` is the one indexed field whose value is a nested dict, so a top-level
@@ -20,7 +21,7 @@ POINTER_KEYS = {
 # retrieval.vector_search and handed verbatim to the model, so anything that lands in it
 # is both persisted in the searchable collection and rendered. Bound it the same way the
 # extractor layer is bounded by test_markdown_spans.test_metadata_carries_no_heading_text.
-METADATA_KEYS = {"extractor", "section", "heading_span"}
+METADATA_KEYS = {"extractor", "section", "heading_span", "heading_path"}
 EXTRACTOR_NAMES = {"markdown", "text", "csv", "pdf"}
 
 
@@ -40,6 +41,13 @@ def _assert_metadata_cannot_carry_text(meta, where):
             assert all(isinstance(v, int) and not isinstance(v, bool) for v in value.values()), (
                 f"{where}: metadata.heading_span bounds must be ints (offsets, never text)"
             )
+        elif key == "heading_path":
+            assert isinstance(value, list), f"{where}: metadata.heading_path must be a list"
+            for span in value:
+                assert set(span) == {"start", "end"}, f"{where}: heading_path entry is not a span"
+                assert all(isinstance(v, int) and not isinstance(v, bool) for v in span.values()), (
+                    f"{where}: heading_path bounds must be ints (offsets, never text)"
+                )
         else:
             assert isinstance(value, int) and not isinstance(value, bool), (
                 f"{where}: metadata.{key} must be an int, got {type(value)}"

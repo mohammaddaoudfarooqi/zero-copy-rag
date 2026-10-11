@@ -254,8 +254,9 @@ rather than on a count, because a count is only a valid bound while the embedded
 exactly 0..n-1. A gap in that set would make the prune delete chunks the same activity had just
 upserted.
 
-**Lifecycle transitions clear the document.** If Stage 1 yields zero chunks (empty content, an
-unsupported source type, or bytes that fail to decode as UTF-8), the workflow does not fall
+**Lifecycle transitions clear the document.** If Stage 1 yields zero chunks (the object was
+deleted, its content is empty, its type is unsupported, or its bytes fail to decode as UTF-8),
+the workflow does not fall
 through to indexing: it calls `clear_document(doc_id, reason, target_collection)`, which deletes
 every existing chunk for that `doc_id`. A document that stops producing chunks stops being
 citable; leaving its old chunks searchable would mean the agent could cite text that is gone.
@@ -332,7 +333,7 @@ real error behind a timeout.
   `ValueError`, because clearing a document is `clear_document`'s job and taking that effect here
   would prune without recording a reason.
 - `clear_document`: deletes every chunk for a `doc_id` from both the searchable collection and
-  staging, for the empty / unsupported / undecodable lifecycle transition.
+  staging, when the object is deleted, empty, unsupported or undecodable.
 
 ---
 
@@ -487,7 +488,8 @@ The `filter` fields let retrieval scope to a document or source URI without a fu
 
 ## 10. Trigger layer
 
-The trigger turns an S3 **ObjectCreated** event into the start of an `IngestWorkflow`. All
+The trigger turns an S3 **ObjectCreated**, **ObjectRemoved** or **LifecycleExpiration** event
+into the start of an `IngestWorkflow`. All
 adapters funnel through one shared, source-agnostic core in `pipeline/trigger.py`:
 
 ```python
@@ -507,6 +509,13 @@ async def start_ingest(client, ref: S3Ref) -> str:
 
 `refs_from_s3_event` (`s3util.py`) parses the standard `Records[*].s3` envelope (SQS- and SNS-wrapped
 bodies are unwrapped, and `s3:TestEvent` yields no refs), URL-decoding the key.
+
+A removal starts the same workflow as an upload, under the same id. `fetch_and_stage_chunks` then
+reads the bucket's current state rather than trusting the event type: a `NoSuchKey` (or 404)
+returns zero chunks with status `missing`, and the workflow clears the document. So a delete
+terminates any in-flight ingest of that key, and a delete event that arrives after a re-upload
+finds the object present and re-indexes it (or skips it as unchanged) instead of clearing it.
+Other S3 errors, such as `AccessDenied`, still fail the activity.
 
 ### Local dev: `seed.py`
 
@@ -785,12 +794,14 @@ The content-hash check in `fetch_and_stage_chunks` gives built-in incremental sy
 - Same key, new content: re-embed; `index_document` updates in place and prunes stale chunks.
   Until it finishes, reads of the old chunks return `stale`, because the ETag changed.
 - Same key, now unsupported or empty: `clear_document` removes its chunks.
+- Key deleted: the ObjectRemoved event starts the workflow, which finds the object gone and
+  clears its chunks.
 - New key: full ingest.
 
-A deleted object is the one change this does not catch: only ObjectCreated events start an
-ingest, so the deleted object's chunks stay searchable and `read_span` reports them `missing`.
-Handling ObjectRemoved events with `clear_document`, or the reconciliation sweep below, would
-close that gap. Neither is implemented.
+A dropped event is the one change this does not catch. S3 invokes the Lambda asynchronously, and
+an invocation that still fails after Lambda's retries is discarded unless a dead-letter queue or
+failure destination catches it. A lost delete leaves chunks that `read_span` reports `missing`. The reconciliation sweep below would close that gap;
+it is not implemented.
 
 ### Scheduled reconciliation / full re-sync
 

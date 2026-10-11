@@ -1,5 +1,6 @@
 # Tests for refs_from_s3_event, the shared S3/SQS/SNS event parser.
-# Covers SNS unwrapping, TestEvent filtering, key url-decoding, and event-type filtering.
+# Covers SNS unwrapping, TestEvent filtering, key url-decoding, and which event types
+# start an ingest (created, removed and lifecycle-expired objects).
 
 from __future__ import annotations
 
@@ -20,9 +21,20 @@ def test_object_created_yields_ref():
     assert [(r.bucket, r.key) for r in refs] == [("b", "a.md")]
 
 
-def test_object_removed_is_ignored():
+def test_object_removed_yields_ref():
+    """A delete starts the same ingest as an upload; the ingest finds the object gone."""
     refs = refs_from_s3_event({"Records": [_record("s3:ObjectRemoved:Delete", "a.md")]})
-    assert refs == []
+    assert [(r.bucket, r.key) for r in refs] == [("b", "a.md")]
+
+
+def test_lifecycle_expiration_yields_ref():
+    refs = refs_from_s3_event({"Records": [_record("LifecycleExpiration:Delete", "a.md")]})
+    assert [r.key for r in refs] == ["a.md"]
+
+
+def test_other_event_types_are_ignored():
+    for name in ("ObjectRestore:Completed", "ObjectTagging:Put", "Replication:OperationFailed"):
+        assert refs_from_s3_event({"Records": [_record(name, "a.md")]}) == [], name
 
 
 def test_test_event_is_ignored():

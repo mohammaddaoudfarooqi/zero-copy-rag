@@ -102,3 +102,16 @@ async def test_multi_record_event_starts_one_per_object():
     assert len(started) == 2
     keys = {c["arg"].key for c in client.calls}
     assert keys == {"docs/a.md", "docs/b.md"}
+
+
+async def test_object_removed_event_starts_the_same_workflow_as_an_upload():
+    """A delete reuses the key's workflow id, so it terminates an in-flight ingest of the
+    object it removed instead of racing it."""
+    created, removed = FakeClient(), FakeClient()
+    await handle_s3_event(created, AWS_EVENT)
+    await handle_s3_event(removed, _event("ObjectRemoved:Delete"))
+
+    assert len(removed.calls) == 1
+    assert removed.calls[0]["workflow"] == created.calls[0]["workflow"]
+    assert removed.calls[0]["id"] == created.calls[0]["id"]
+    assert removed.calls[0]["id_conflict_policy"] == WorkflowIDConflictPolicy.TERMINATE_EXISTING

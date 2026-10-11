@@ -11,6 +11,7 @@ Stages (each a distinct activity, so the workflow is resumable):
 
 from __future__ import annotations
 
+from botocore.exceptions import ClientError
 from pymongo import UpdateOne
 from temporalio import activity
 
@@ -22,6 +23,9 @@ from ..models import S3Ref, doc_id_for_uri, sha256_hex
 from ..search_index import ensure_vector_index
 from ..spanio import fetch_range
 
+# S3 error codes that mean the object is gone, as opposed to unreadable.
+_GONE_CODES = {"NoSuchKey", "404"}
+
 
 def _staging():
     return mongo_client()[settings.mongodb_db][settings.chunks_collection]
@@ -30,14 +34,23 @@ def _staging():
 @activity.defn
 def fetch_and_stage_chunks(ref: S3Ref, target_collection: str | None = None) -> dict:
     """Stage 1: download, extract to byte spans, stage pointers. Never stages text."""
-    obj = s3_client().get_object(Bucket=ref.bucket, Key=ref.key)
+    doc_id = doc_id_for_uri(ref.s3_uri)
+    try:
+        obj = s3_client().get_object(Bucket=ref.bucket, Key=ref.key)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") not in _GONE_CODES:
+            raise
+        # Deleted (a removal event, or an upload event that arrived after a delete).
+        # Not an error: like an unsupported type, the workflow clears the document.
+        activity.logger.info("object gone, clearing %s", ref.s3_uri)
+        return {"doc_id": doc_id, "doc_hash": "", "n": 0,
+                "status": "missing", "reason": "object no longer exists"}
     body: bytes = obj["Body"].read()
     content_type = obj.get("ContentType", ref.content_type or "")
     # The ETag from the GET is authoritative. The event's copy may be absent on the
     # poll path, and it is what every later ranged read is conditioned on.
     etag = str(obj.get("ETag", ref.etag)).strip('"')
 
-    doc_id = doc_id_for_uri(ref.s3_uri)
     doc_hash = sha256_hex(body)
 
     # Short-circuit: this exact version is already indexed. The question is only ever

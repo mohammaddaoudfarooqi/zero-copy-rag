@@ -152,8 +152,9 @@ sequenceDiagram
     end
 ```
 
-A document that yields zero chunks (empty, unsupported or not valid UTF-8) goes to
-`clear_document` instead, so it stops being citable.
+A document that yields zero chunks (deleted, empty, unsupported or not valid UTF-8) goes to
+`clear_document` instead, so it stops being citable. Deleting an object from the bucket fires
+the same workflow, which finds the object gone and clears it.
 
 ---
 

@@ -49,7 +49,7 @@ def _gateway_kwargs(provider: str, api_key: str) -> dict[str, Any]:
     return extra
 
 
-def build_llm(temperature: float | None = None) -> "BaseChatModel":
+def build_llm(temperature: float | None = None) -> BaseChatModel:
     """Build the chat model named by LLM_PROVIDER, keyed by LLM_API_KEY.
 
     ``temperature`` is omitted from the request unless a caller passes one.

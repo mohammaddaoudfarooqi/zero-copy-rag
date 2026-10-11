@@ -43,13 +43,13 @@ def _resolve(setting_value: str, env_name: str) -> str:
 
 
 @lru_cache(maxsize=_CACHE_SIZE)
-def _mongo_client_for(uri: str) -> "MongoClient":
+def _mongo_client_for(uri: str) -> MongoClient:
     from pymongo import MongoClient
 
     return MongoClient(uri, appname="zero-copy-rag")
 
 
-def mongo_client() -> "MongoClient":
+def mongo_client() -> MongoClient:
     uri = _resolve(settings.mongodb_uri, "MONGODB_URI")
     if not uri:
         raise RuntimeError("MONGODB_URI is not set. Populate .env or grant the secret.")
@@ -62,13 +62,13 @@ def knowledge_collection(name: str | None = None):
 
 
 @lru_cache(maxsize=_CACHE_SIZE)
-def _voyage_client_for(api_key: str, base_url: str) -> "voyageai.Client":
+def _voyage_client_for(api_key: str, base_url: str) -> voyageai.Client:
     import voyageai
 
     return voyageai.Client(api_key=api_key, base_url=base_url)
 
 
-def voyage_client() -> "voyageai.Client":
+def voyage_client() -> voyageai.Client:
     api_key = _resolve(settings.voyage_api_key, "VOYAGE_API_KEY")
     if not api_key:
         raise RuntimeError("VOYAGE_API_KEY is not set. Populate .env or grant the secret.")

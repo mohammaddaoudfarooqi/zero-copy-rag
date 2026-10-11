@@ -74,7 +74,7 @@ def test_heading_span_points_at_the_heading_text():
 
 
 def test_preamble_before_first_heading_has_no_heading_span():
-    body = "Preamble line.\n\n# Later\n\nBody.\n".encode("utf-8")
+    body = b"Preamble line.\n\n# Later\n\nBody.\n"
     chunks = _extractor().chunk(body)
     assert "heading_span" not in chunks[0].meta
 

@@ -185,7 +185,7 @@ def test_unsupported_type_stages_nothing_and_reports_why(wired, monkeypatch):
 
 
 def test_embed_batch_makes_one_ranged_get_and_one_embed_call(wired):
-    staging, know, s3, voy = wired
+    staging, _know, s3, voy = wired
     n = ing.fetch_and_stage_chunks(REF)["n"]
     ranged_before = len([c for c in s3.calls if "Range" in c])
 
@@ -204,7 +204,7 @@ def test_embed_batch_texts_match_the_staged_hashes(wired):
     doc_id = staging.docs[0]["doc_id"]
     _run(ing.embed_staged_batch, doc_id, list(range(n)), None)
     sent = voy.batches[0]
-    for d, text in zip(sorted(staging.docs, key=lambda x: x["ordinal"]), sent):
+    for d, text in zip(sorted(staging.docs, key=lambda x: x["ordinal"]), sent, strict=True):
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == d["content_hash"]
 
 
@@ -261,7 +261,7 @@ def test_embed_batch_rebases_a_nonzero_lo_before_slicing(wired, monkeypatch):
 
     sent = voy.batches[0]
     assert len(sent) == 3
-    for d, text in zip(sorted(docs, key=lambda x: x["ordinal"]), sent):
+    for d, text in zip(sorted(docs, key=lambda x: x["ordinal"]), sent, strict=True):
         expected = BIG[d["span"]["start"] : d["span"]["end"]].decode("utf-8")
         assert text == expected
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == d["content_hash"]
@@ -303,7 +303,7 @@ def test_embed_batch_mixed_batch_narrows_range_to_the_pending_subset(wired, monk
     sent = voy.batches[0]
     pending_docs = sorted((by_ordinal[i] for i in (1, 2, 3, 4)), key=lambda x: x["ordinal"])
     assert len(sent) == len(pending_docs)
-    for d, text in zip(pending_docs, sent):
+    for d, text in zip(pending_docs, sent, strict=True):
         expected = BIG[d["span"]["start"] : d["span"]["end"]].decode("utf-8")
         assert text == expected
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == d["content_hash"]

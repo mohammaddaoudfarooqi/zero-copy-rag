@@ -15,6 +15,7 @@ import json
 import os
 
 from pymongo import IndexModel
+from pymongo.errors import PyMongoError
 from pymongo.operations import SearchIndexModel
 
 from pipeline.clients import mongo_client
@@ -26,7 +27,7 @@ _DEFS_PATH = os.path.join(os.path.dirname(__file__), "atlas_indexes.json")
 def _existing_index_names(coll) -> set[str]:
     try:
         return {ix["name"] for ix in coll.list_search_indexes()}
-    except Exception:  # collection may not exist yet
+    except PyMongoError:  # collection may not exist yet
         return set()
 
 

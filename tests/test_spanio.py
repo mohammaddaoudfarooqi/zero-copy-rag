@@ -10,7 +10,7 @@ from botocore.exceptions import ClientError
 
 from pipeline import spanio
 
-BODY = "# Title\n\nAlpha beta gamma delta.\n".encode("utf-8")
+BODY = b"# Title\n\nAlpha beta gamma delta.\n"
 START, END = 9, 20  # "Alpha beta "
 SEGMENT = BODY[START:END].decode("utf-8")
 SEGMENT_HASH = hashlib.sha256(SEGMENT.encode("utf-8")).hexdigest()

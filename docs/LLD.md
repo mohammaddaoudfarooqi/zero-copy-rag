@@ -91,7 +91,7 @@ pipeline/
     └── markdown.py                                <- the only supported extractor
 
 mongodb_agent_engine/
-├── app.py                <- Agent Engine entrypoint: registers search_knowledge + read_span as tools,
+├── app.py                <- Agent Engine entrypoint: registers search_knowledge + read_spans as tools,
 │                             wires two sub-agents (knowledge-retriever, source-reader)
 ├── llm.py                <- model selection from LLM_PROVIDER / LLM_MODEL, optional gateway via LLM_BASE_URL
 └── README.md              <- SDK surface, capability boundary, deployment notes
@@ -187,7 +187,7 @@ flowchart TD
     CLR -.->|delete| KZC
 
     KZC -->|"$vectorSearch: pointers only<br/>chunk_id, ordinal, source_uri, span, metadata, score"| AGENT[Hosted deep agent<br/>mongodb_agent_engine/]
-    AGENT -->|"read_span(chunk_id)"| RS["pipeline.spanio.read_span<br/>ranged GET conditioned on etag,<br/>strict UTF-8, sha256 verify"]
+    AGENT -->|"read_spans(chunk_ids)"| RS["pipeline.spanio.read_span<br/>ranged GET conditioned on etag,<br/>strict UTF-8, sha256 verify"]
     RS -->|ranged GET| OBJ[(Source object<br/>same bucket)]
 ```
 
@@ -562,7 +562,7 @@ flowchart LR
 
     subgraph POD[Tool Pod: MONGODB_URI, MONGODB_DB, VOYAGE_API_KEY,<br/>LLM_API_KEY, AWS keys]
         SK["search_knowledge(query, k)"]
-        RS["read_span(chunk_id)"]
+        RS["read_spans(chunk_ids)"]
     end
 
     RET -->|calls| SK
@@ -589,17 +589,34 @@ the cluster's IP access list rather than through the HTTPS egress allow-list abo
 `mongodb_agent_engine/app.py` registers two tools directly on top of `pipeline/` code, both with
 `is_local=False` so they run in the Tool Pod rather than in the agent runtime:
 
-- `search_knowledge(query, k=8)` wraps `pipeline.retrieval.vector_search`. It can never return
-  document text: the underlying `$vectorSearch` projection has no `text` key by construction.
-- `read_span(chunk_id)` wraps `pipeline.spanio.read_span`, called positionally with only the
-  `chunk_id`. Its result carries text only when `status == "ok"`; `unknown`, `missing`, and
-  `stale` all carry none.
+- `search_knowledge(query, k=12)` wraps `pipeline.retrieval.vector_search` and records the
+  returned `chunk_id`s for the session. It can never return document text: the underlying
+  `$vectorSearch` projection has no `text` key by construction.
+- `read_spans(chunk_ids)` calls `pipeline.spanio.read_span` once per distinct `chunk_id`,
+  positionally and concurrently, for at most `READ_LIMIT` (12) of them; the rest come back
+  `skipped`. It reads only ids a search returned in this session (the tool sandbox is reserved
+  per session and reset between sessions); any other id comes back `not_found_by_search`.
+  Each result carries text only when `status == "ok"`.
+
+The read limits are in code because the prompt alone did not hold. Chunk ids are predictable
+(`doc_id:ordinal`), and one answer read 34 chunks by constructing ids, each read a separate tool
+round trip of 7 to 9 seconds. Measured on the same question through the local stack:
+
+| Version | Tool calls | Chunks read | Model calls | Time | Answer |
+| --- | --- | --- | --- | --- | --- |
+| One read per call, prompt-only limit | 35 | 34 | 16 | about 7 min | Phases 1 to 4 |
+| Batched, search-gated, 12 per call | 2 | 12 | 13 | 4.5 min | Phases 1 to 3 |
+
+Model calls, about 15 to 25 seconds each, now dominate the run time. Letting the agent run
+several search-then-read rounds recovered no time: one such run made 35 model calls and hit the
+execution timeout. The trade-off accepted is coverage: a question whose answer spans more than
+twelve chunks gets a partial answer that says what it did not cover.
 
 These are split across two sub-agents: `knowledge-retriever` (tools=[`search_knowledge`]) and
-`source-reader` (tools=[`read_span`]). The parent agent is built with `tools=[]`, so it has to
-delegate. Its instructions tell it to delegate search to `knowledge-retriever`, pick two to four
-promising `chunk_id`s, delegate those to `source-reader`, and quote only text that came back with
-`status == "ok"`.
+`source-reader` (tools=[`read_spans`]). The parent agent is built with `tools=[]`, so it has to
+delegate. Its instructions tell it to delegate once to each: one search, then at most twelve
+of the returned `chunk_id`s to `source-reader` in a single task, with a second read only if every
+read in the first came back unavailable. It quotes only text that came back with `status == "ok"`.
 
 The model is chosen in `mongodb_agent_engine/llm.py` from `LLM_PROVIDER` (default
 `anthropic`, model `claude-sonnet-5`) with an optional `LLM_MODEL` override, and optionally
@@ -610,7 +627,7 @@ routes every model call through the Orchestration Engine to the Tool Pod, which 
 
 ### What is and is not enforced
 
-`read_span`'s signature is a real, Python-level guarantee: no caller, model or otherwise, can
+`read_spans`'s signature is a real, Python-level guarantee: no caller, model or otherwise, can
 pass a bucket, key, byte range, or content hash through this tool. `tests/test_agent_wiring.py`
 pins that signature and the `is_local=False` placement.
 

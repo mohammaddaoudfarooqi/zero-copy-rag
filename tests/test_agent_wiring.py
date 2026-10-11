@@ -1,5 +1,6 @@
 # Tests the agent shim's contract: the retriever never returns text, the reader
-# is the only text path, and read_span takes no caller-supplied pointers.
+# is the only text path, and read_spans takes no caller-supplied pointers and reads
+# at most READ_LIMIT chunks per call.
 
 from __future__ import annotations
 
@@ -91,7 +92,7 @@ def built_agent(agent_module, monkeypatch):
 
 
 def test_both_tools_are_registered(agent_module):
-    assert set(agent_module._REGISTERED) == {"search_knowledge", "read_span"}
+    assert set(agent_module._REGISTERED) == {"search_knowledge", "read_spans"}
 
 
 def test_tools_run_in_the_tool_pod(agent_module):
@@ -121,25 +122,26 @@ def test_tools_return_json_strings(agent_module, monkeypatch):
     """The platform requires a string return; a dict would reach the model unserialized."""
     monkeypatch.setattr(agent_module, "vector_search", lambda q, k=5: [])
     monkeypatch.setattr(agent_module, "_read_span", lambda c: {"chunk_id": c, "status": "unknown"})
+    agent_module._FOUND.add("d:0")
 
     searched = agent_module.search_knowledge("q")
-    read = agent_module.read_span("d:0")
+    read = agent_module.read_spans(["d:0"])
     assert isinstance(searched, str) and isinstance(read, str)
     assert json.loads(searched) == {"results": []}
-    assert json.loads(read) == {"chunk_id": "d:0", "status": "unknown"}
+    assert json.loads(read) == {"results": [{"chunk_id": "d:0", "status": "unknown"}]}
 
 
-def test_read_tool_takes_only_a_chunk_id(agent_module):
+def test_read_tool_takes_only_chunk_ids(agent_module):
     import inspect
 
-    assert list(inspect.signature(agent_module.read_span).parameters) == ["chunk_id"]
+    assert list(inspect.signature(agent_module.read_spans).parameters) == ["chunk_ids"]
 
 
 def test_subagents_are_split_by_capability(built_agent):
     subagents = {s["name"]: s for s in built_agent["subagents"]}
     assert set(subagents) == {"knowledge-retriever", "source-reader"}
     assert [t.name for t in subagents["knowledge-retriever"]["tools"]] == ["search_knowledge"]
-    assert [t.name for t in subagents["source-reader"]["tools"]] == ["read_span"]
+    assert [t.name for t in subagents["source-reader"]["tools"]] == ["read_spans"]
 
 
 def test_parent_agent_holds_no_tools_of_its_own(built_agent):
@@ -166,7 +168,7 @@ def test_subagent_tool_lookup_rejects_an_unknown_name(agent_module):
 def test_read_tool_forwards_the_chunk_id_and_injects_nothing(agent_module, monkeypatch):
     """The reader tool's whole security surface is one call. Pin it behaviourally.
 
-    test_read_tool_takes_only_a_chunk_id proves the model cannot PASS a pointer.
+    test_read_tool_takes_only_chunk_ids proves the model cannot PASS a pointer.
     This proves the shim does not SUPPLY one on the model's behalf: pipeline.spanio
     .read_span accepts keyword-only `collection` and `client` for test injection, and
     a shim that forwarded either would silently pin the tool to something other than
@@ -181,8 +183,81 @@ def test_read_tool_forwards_the_chunk_id_and_injects_nothing(agent_module, monke
         return sentinel
 
     monkeypatch.setattr(agent_module, "_read_span", _spy)
-    out = json.loads(agent_module.read_span("d:0"))
+    agent_module._FOUND.add("d:0")
+    out = json.loads(agent_module.read_spans(["d:0"]))
 
     assert seen["args"] == ("d:0",)
     assert seen["kwargs"] == {}
-    assert out == sentinel
+    assert out == {"results": [sentinel]}
+
+
+@pytest.fixture
+def reads(agent_module, monkeypatch):
+    """Record which chunk_ids reach the underlying reader."""
+    seen: list[str] = []
+
+    def _fake(chunk_id):
+        seen.append(chunk_id)
+        return {"chunk_id": chunk_id, "status": "ok", "text": f"text of {chunk_id}"}
+
+    monkeypatch.setattr(agent_module, "_read_span", _fake)
+    # read_spans only reads ids a search returned; most tests are about reading,
+    # so mark a generous range as already found.
+    agent_module._FOUND.update(f"d:{i}" for i in range(50))
+    return seen
+
+
+def test_reads_beyond_the_limit_are_skipped_not_read(agent_module, reads):
+    """The read budget is enforced in code: prompts alone let one run read 34 chunks."""
+    limit = agent_module.READ_LIMIT
+    ids = [f"d:{i}" for i in range(limit + 3)]
+    out = json.loads(agent_module.read_spans(ids))["results"]
+
+    assert len(reads) == limit
+    assert [r["chunk_id"] for r in out] == ids
+    assert all(r["status"] == "ok" for r in out[:limit])
+    skipped = out[limit:]
+    assert all(r["status"] == "skipped" and "text" not in r for r in skipped)
+    assert all(str(limit) in r["reason"] for r in skipped)
+
+
+def test_results_keep_the_order_the_ids_were_given(agent_module, reads):
+    ids = ["d:3", "d:1", "d:2"]
+    out = json.loads(agent_module.read_spans(ids))["results"]
+    assert [r["chunk_id"] for r in out] == ids
+
+
+def test_a_repeated_chunk_id_is_read_once(agent_module, reads):
+    json.loads(agent_module.read_spans(["d:1", "d:1", "d:2"]))
+    assert sorted(reads) == ["d:1", "d:2"]
+
+
+def test_a_bare_string_is_treated_as_one_chunk_id(agent_module, reads):
+    """Models sometimes pass a single id where a list is expected."""
+    out = json.loads(agent_module.read_spans("d:7"))["results"]
+    assert reads == ["d:7"] and out[0]["chunk_id"] == "d:7"
+
+
+def test_only_chunk_ids_a_search_returned_can_be_read(agent_module, monkeypatch):
+    """chunk_ids are predictable (doc_id:ordinal). Without this, a model reads past the
+    search results by constructing ids, which is what made one answer read 38 chunks."""
+    seen: list[str] = []
+    monkeypatch.setattr(agent_module, "_read_span", lambda c: seen.append(c) or {"chunk_id": c, "status": "ok", "text": "t"})
+    monkeypatch.setattr(agent_module, "vector_search", lambda q, k=12: [
+        {"chunk_id": "doc:4", "ordinal": 4, "source_uri": "s3://b/k.md",
+         "span": {"kind": "byte", "start": 0, "end": 9}, "metadata": {}, "score": 0.9}
+    ])
+    agent_module.search_knowledge("q")
+    out = {r["chunk_id"]: r for r in json.loads(agent_module.read_spans(["doc:4", "doc:5"]))["results"]}
+
+    assert seen == ["doc:4"]
+    assert out["doc:4"]["status"] == "ok"
+    assert out["doc:5"]["status"] == "not_found_by_search" and "text" not in out["doc:5"]
+
+
+def test_the_read_limit_matches_the_search_default(agent_module):
+    """One search's worth of hits fits in one read call."""
+    import inspect
+
+    k_default = inspect.signature(agent_module.search_knowledge).parameters["k"].default
+    assert agent_module.READ_LIMIT == k_default

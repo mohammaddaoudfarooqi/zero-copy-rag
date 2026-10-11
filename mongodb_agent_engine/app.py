@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from agent_engine_sdk_langgraph import App
@@ -21,38 +22,74 @@ load_dotenv()
 
 app = App(app_name="zero-copy-rag")
 
+# chunk_ids that search_knowledge has returned in this tool sandbox. The sandbox is
+# reserved for one session and reset before the next, so this is per session.
+# read_spans reads only these: chunk_ids are predictable (doc_id:ordinal), and
+# without the check a model reads past the search results by constructing ids.
+_FOUND: set[str] = set()
+
 
 # is_local=False puts both tools in the Tool Pod rather than in the agent
 # runtime. That is the placement the platform documents for database reads and
 # external APIs, and it is what lets agent.yaml grant MongoDB, Voyage and AWS
 # credentials to the tool sandbox alone.
 @app.tool(is_local=False)
-def search_knowledge(query: str, k: int = 8) -> str:
+def search_knowledge(query: str, k: int = 12) -> str:
     """Search the indexed corpus. Returns citations, not text.
 
     Each result is a pointer: chunk_id, source_uri, ordinal, span, metadata and
-    score. To read the text behind a result, hand its chunk_id to read_span.
+    score. To read the text behind results, hand their chunk_ids to read_spans.
 
     Args:
         query: Natural-language search query.
         k: How many chunks to return. Keep it small; every hit costs a read later.
     """
-    return json.dumps({"results": vector_search(query, k=k)})
+    results = vector_search(query, k=k)
+    _FOUND.update(hit["chunk_id"] for hit in results)
+    return json.dumps({"results": results})
+
+
+# Most chunks one read_spans call will read: one search's worth (k defaults to 12).
+# A prompt alone did not hold the line: one run read 34 chunks for one question,
+# each a separate tool round trip. Reads in one call run concurrently.
+READ_LIMIT = 12
 
 
 @app.tool(is_local=False)
-def read_span(chunk_id: str) -> str:
-    """Read the exact source text behind one chunk_id.
+def read_spans(chunk_ids: list[str]) -> str:
+    """Read the exact source text behind up to twelve chunk_ids, in one call.
 
-    Takes only a chunk_id. The pointer is resolved server-side and the bytes are
-    verified against the hash recorded at index time. A result whose status is
-    not "ok" carries no text: say the source is unavailable rather than
-    answering from the search result alone.
+    Takes only chunk_ids that search_knowledge returned; any other id comes back
+    with status "not_found_by_search" and is not read. Each pointer is resolved
+    server-side and its bytes are verified against the hash recorded at index
+    time. A result whose status is not "ok" carries no text: say that source is
+    unavailable rather than answering from the search result alone. chunk_ids
+    beyond the first twelve come back with status "skipped" and are not read.
 
     Args:
-        chunk_id: A chunk_id returned by search_knowledge, used verbatim.
+        chunk_ids: chunk_ids returned by search_knowledge, used verbatim. Pass
+            the most promising ones first.
     """
-    return json.dumps(_read_span(chunk_id))
+    if isinstance(chunk_ids, str):
+        chunk_ids = [chunk_ids]
+    ordered = list(dict.fromkeys(chunk_ids))
+    unfound = {
+        c: {"chunk_id": c, "status": "not_found_by_search",
+            "reason": "read only chunk_ids that search_knowledge returned"}
+        for c in ordered if c not in _FOUND
+    }
+    found = [c for c in ordered if c in _FOUND]
+    to_read, over = found[:READ_LIMIT], found[READ_LIMIT:]
+    with ThreadPoolExecutor(max_workers=max(1, len(to_read))) as pool:
+        # Positional chunk_id only: the shim never supplies a collection or client.
+        read = dict(zip(to_read, pool.map(_read_span, to_read), strict=True))
+    skipped = {
+        c: {"chunk_id": c, "status": "skipped",
+            "reason": f"over the limit of {READ_LIMIT} reads per call"}
+        for c in over
+    }
+    every = {**unfound, **skipped, **read}
+    return json.dumps({"results": [every[c] for c in ordered]})
 
 
 def _tools_named(*names: str) -> list[Any]:
@@ -75,9 +112,13 @@ def _tools_named(*names: str) -> list[Any]:
 SYSTEM_PROMPT = """\
 You answer questions about the indexed corpus, and only from what that corpus says.
 
-Work in two steps. First delegate to knowledge-retriever, which returns pointers
-with no text. Then pick the two to four most promising chunk_ids and delegate
-those to source-reader, which returns the text.
+Work in two steps, each delegated once. First ask knowledge-retriever for
+pointers, which carry no text. Then send the most promising of the chunk_ids it
+returned, at most twelve, to source-reader in a single task; it reads them all
+in one call, and it cannot read a chunk_id the search did not return. Delegate a
+second time only if every read in the first batch came back unavailable. Answer
+from what those reads returned, and say what the sources did not cover rather
+than searching again: every extra delegation costs several model calls.
 
 Quote only text that source-reader returned with status "ok". If a read comes
 back stale, missing or unknown, say the source is unavailable and name its
@@ -94,9 +135,9 @@ read document text, so you must not produce any: report the pointers and stop.
 """
 
 READER_PROMPT = """\
-For each chunk_id you are given, call read_span once, with the chunk_id exactly
-as you received it. Return the text exactly as it comes back. If status is not
-"ok", report the status and the chunk_id and return no text for that chunk.
+Call read_spans exactly once, passing every chunk_id you were given exactly as
+you received it. Return each text exactly as it comes back. For a result whose
+status is not "ok", report the status and the chunk_id and return no text for it.
 """
 
 
@@ -126,7 +167,7 @@ def build_agent():
                 name="source-reader",
                 description="Reads the source text behind specific chunk_ids.",
                 system_prompt=READER_PROMPT,
-                tools=_tools_named("read_span"),
+                tools=_tools_named("read_spans"),
             ),
         ],
         system_prompt=SYSTEM_PROMPT,

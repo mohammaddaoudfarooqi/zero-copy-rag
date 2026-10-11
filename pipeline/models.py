@@ -7,8 +7,7 @@ These are plain dataclasses so they serialize cleanly through Temporal's default
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 
 @dataclass
@@ -41,46 +40,6 @@ class Span:
     start: int
     end: int
     kind: str = "byte"
-
-
-@dataclass
-class Chunk:
-    """One chunk of a document, ready to be embedded."""
-
-    doc_id: str
-    chunk_id: str
-    ordinal: int
-    text: str
-    content_hash: str  # sha256 of this chunk's text
-    doc_content_hash: str = ""  # sha256 of the whole source object (for dedupe)
-    source_uri: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class ChunkResult:
-    """Return value of the chunk_document activity."""
-
-    doc_id: str
-    doc_content_hash: str
-    chunks: list[Chunk] = field(default_factory=list)
-
-
-@dataclass
-class EmbeddedChunk:
-    """A chunk plus its Voyage embedding, ready to upsert into Atlas."""
-
-    doc_id: str
-    chunk_id: str
-    ordinal: int
-    text: str
-    content_hash: str
-    embedding: list[float]
-    model: str
-    dim: int
-    doc_content_hash: str = ""
-    source_uri: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def doc_id_for_uri(uri: str) -> str:
